@@ -82,6 +82,28 @@ Put both devices on a VPN and it works from anywhere — **[docs/REMOTE.md](docs
 > doesn't stop an *active* on-path attacker; running over a VPN (Tailscale/
 > WireGuard) closes that gap. Honest threat model: [SECURITY.md](docs/SECURITY.md).
 
+## Managing the daemon
+
+The daemon has a small lifecycle CLI so you never have to hunt for a stray
+process or hit an `EADDRINUSE` crash. Run these from the repo root:
+
+| Command | What it does |
+|---|---|
+| `npm start` | Start the daemon (prints the pairing QR). If one is already running, it just reports the status instead of crashing. |
+| `npm run status` | Is it up? How many phones are connected? Any approvals waiting? |
+| `npm run stop` | Cleanly shut it down. |
+| `npm run restart` | Stop the running daemon and start a fresh one — handy after pulling code. |
+
+- Re-pair (mint a new key + QR) with `npm start -- --pair`.
+- Run a second instance on another port with `AWAYKIT_PORT=4600 npm start`.
+- The controls talk to the daemon over loopback (`/health`, `/shutdown`), so
+  there are no PID files and it works the same on macOS, Linux, and Windows.
+
+**On the phone**, tap the status pill (top-right) for connection controls:
+**Reconnect now**, **Disconnect**, and **Unpair this device**. The stream also
+auto-reconnects on its own — so a laptop-side `npm run restart` reconnects your
+phone automatically, no re-scan needed (the pairing key persists).
+
 ## Status
 
 🚧 **Early development.**

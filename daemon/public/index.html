@@ -26,7 +26,9 @@
     }
     header .logo { font-weight: 700; letter-spacing: -0.02em; font-size: 17px; }
     header .logo span { color: var(--accent); }
-    .status { margin-left: auto; display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+    .status { margin-left: auto; display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; padding: 4px 8px; margin-right: -4px; border-radius: 999px; }
+    .status:active { background: var(--surface-2); }
+    .status .chev { color: var(--muted); font-size: 9px; margin-left: 1px; }
     .lock { font-size: 12px; color: var(--ok); }
     .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--no); }
     .dot.live { background: var(--ok); animation: pulse 2s infinite; }
@@ -64,14 +66,27 @@
     #gate h2 { margin: 0 0 8px; font-size: 19px; }
     #gate p { color: var(--muted); font-size: 14px; margin: 0 0 6px; }
     #gate .hint { margin-top: 16px; font-size: 12.5px; color: var(--muted); }
+
+    /* connection action sheet */
+    .sheet { position: fixed; inset: 0; z-index: 60; display: none; align-items: flex-end; justify-content: center; background: rgba(0,0,0,.5); }
+    .sheet.open { display: flex; animation: fade .15s ease-out; }
+    @keyframes fade { from{opacity:0;} to{opacity:1;} }
+    .sheet-box { width: 100%; max-width: 640px; background: var(--surface); border: 1px solid var(--border); border-bottom: 0; border-radius: 18px 18px 0 0; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); animation: slideup .2s ease-out; }
+    @keyframes slideup { from{transform:translateY(30px);} to{transform:none;} }
+    .sheet-title { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); text-align: center; padding: 6px 0 12px; }
+    .sheet-btn { display: block; width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 12px; padding: 15px; margin-bottom: 9px; font-size: 15px; font-weight: 600; text-align: center; font-family: inherit; cursor: pointer; }
+    .sheet-btn:active { transform: scale(.98); }
+    .sheet-btn.danger { color: var(--no); }
+    .sheet-btn.cancel { background: transparent; border-color: transparent; color: var(--muted); margin-bottom: 0; }
   </style>
 </head>
 <body>
   <header>
     <div class="logo">away<span>kit</span></div>
-    <div class="status">
+    <div class="status" id="statusPill" role="button" tabindex="0" title="Connection options">
       <span id="lock" class="lock" title="end-to-end encrypted">🔒</span>
       <span id="dot" class="dot"></span><span id="statusText">…</span>
+      <span class="chev">▾</span>
     </div>
   </header>
 
@@ -90,6 +105,16 @@
       <h2 id="gateTitle">Pair this device</h2>
       <p id="gateMsg">Scan the QR code shown in your laptop's terminal (where you ran <b>npm&nbsp;start</b>) to pair securely.</p>
       <div class="hint">Your key never leaves your devices. The channel is end-to-end encrypted.</div>
+    </div>
+  </div>
+
+  <div id="sheet" class="sheet">
+    <div class="sheet-box">
+      <div class="sheet-title">Connection</div>
+      <button id="btnReconnect" class="sheet-btn">🔄&nbsp;&nbsp;Reconnect now</button>
+      <button id="btnDisconnect" class="sheet-btn">⏸&nbsp;&nbsp;Disconnect</button>
+      <button id="btnUnpair" class="sheet-btn danger">🚫&nbsp;&nbsp;Unpair this device</button>
+      <button id="btnCancel" class="sheet-btn cancel">Cancel</button>
     </div>
   </div>
 
@@ -137,6 +162,9 @@
     const dot=document.getElementById("dot"), statusText=document.getElementById("statusText");
     const appEl=document.getElementById("app"), gateEl=document.getElementById("gate");
     const gateTitle=document.getElementById("gateTitle"), gateMsg=document.getElementById("gateMsg");
+    const statusPill=document.getElementById("statusPill"), sheet=document.getElementById("sheet");
+    const btnReconnect=document.getElementById("btnReconnect"), btnDisconnect=document.getElementById("btnDisconnect");
+    const btnUnpair=document.getElementById("btnUnpair"), btnCancel=document.getElementById("btnCancel");
     const cards = new Map();
 
     function showGate(title, msg){ appEl.style.display="none"; gateEl.style.display="flex"; if(title)gateTitle.textContent=title; if(msg)gateMsg.textContent=msg; setStatus(false,"not paired"); }
@@ -184,7 +212,7 @@
     }
 
     // ---------- pairing handshake + encrypted stream ----------
-    let es = null, reconnectT = null;
+    let es = null, reconnectT = null, paused = false;   // paused = user tapped Disconnect
     async function pair(){
       // Fresh ephemeral X25519 keypair per session → forward secrecy.
       const eph = nacl.box.keyPair();
@@ -200,16 +228,38 @@
     function connect(){
       es = new EventSource("/events");
       es.onopen = () => setStatus(true, "connected");
-      es.onerror = () => { setStatus(false); try{es.close();}catch{} clearTimeout(reconnectT); reconnectT=setTimeout(start, 2000); };
+      es.onerror = () => { setStatus(false); try{es.close();}catch{} if(paused) return; clearTimeout(reconnectT); reconnectT=setTimeout(start, 2000); };
       es.addEventListener("m", (e) => { const p = openSealed(sessionKey, e.data); if (p) dispatch(p); });
     }
     async function start(){
+      if (paused) return;
       if (!key) { showGate(); return; }
       setStatus(false, "pairing…");
       let ok=false; try { ok = await pair(); } catch { ok=false; }
-      if (!ok) { if (key) { setStatus(false,"reconnecting…"); clearTimeout(reconnectT); reconnectT=setTimeout(start,2000); } return; }
+      if (!ok) { if (key && !paused) { setStatus(false,"reconnecting…"); clearTimeout(reconnectT); reconnectT=setTimeout(start,2000); } return; }
       showApp(); connect();
     }
+
+    // ---------- connection controls (tap the status pill) ----------
+    function closeStream(){ clearTimeout(reconnectT); try{ es && es.close(); }catch{} es=null; }
+    function openSheet(){
+      btnDisconnect.style.display = paused ? "none" : "block";
+      btnReconnect.innerHTML = paused ? "🔄&nbsp;&nbsp;Reconnect" : "🔄&nbsp;&nbsp;Reconnect now";
+      sheet.classList.add("open");
+    }
+    function closeSheet(){ sheet.classList.remove("open"); }
+    statusPill.onclick = openSheet;
+    statusPill.onkeydown = (e) => { if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openSheet(); } };
+    sheet.onclick = (e) => { if(e.target===sheet) closeSheet(); };
+    btnCancel.onclick = closeSheet;
+    btnReconnect.onclick = () => { closeSheet(); paused=false; closeStream(); setStatus(false,"reconnecting…"); start(); };
+    btnDisconnect.onclick = () => { closeSheet(); paused=true; closeStream(); setStatus(false,"disconnected"); };
+    btnUnpair.onclick = () => {
+      if(!confirm("Unpair this device? You'll need to re-scan the QR from your laptop to reconnect.")) return;
+      closeStream(); paused=true; localStorage.removeItem("awaykit_key"); key=null; closeSheet();
+      showGate("Device unpaired", "Scan the QR code from your laptop's terminal to pair this device again.");
+    };
+
     start();
   </script>
 </body>

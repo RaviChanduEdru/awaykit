@@ -35,6 +35,7 @@ import { randomUUID, randomBytes } from "node:crypto";
 import QRCode from "qrcode";
 import { loadOrCreateKey, regenerateKey, keyPath, seal, open, openProof, newEphemeralKeyPair, deriveSessionKey, b64urlEncode } from "./crypto.js";
 import { pickPairingHost, candidateHosts } from "./net.js";
+import { appendAudit, readAudit } from "./audit.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "public");
@@ -149,7 +150,26 @@ const server = createServer(async (req, res) => {
     // --- local-only endpoints ---
     if (req.method === "GET" && pathname === "/health") {
       if (!isLoopback(req)) { json(res, 403, { ok: false }); return; }
-      json(res, 200, { ok: true, pending: pending.size, clients: clients.size, sessions: sessions.size });
+      json(res, 200, { ok: true, pending: pending.size, clients: clients.size, sessions: sessions.size, port: PORT, uptimeSec: Math.round(process.uptime()) });
+      return;
+    }
+
+    // --- audit log: the record of what was approved/denied (loopback only) ---
+    if (req.method === "GET" && pathname === "/audit") {
+      if (!isLoopback(req)) { json(res, 403, { ok: false }); return; }
+      const limit = Math.min(Number(url.searchParams.get("limit")) || 100, 1000);
+      json(res, 200, { ok: true, entries: readAudit(limit) });
+      return;
+    }
+
+    // --- graceful shutdown, driven by the control CLI (loopback only) ---
+    if (req.method === "POST" && pathname === "/shutdown") {
+      if (!isLoopback(req)) { res.writeHead(403); res.end(); return; }
+      json(res, 200, { ok: true, bye: true });
+      console.log("\n[awaykit] shutdown requested — closing. (paired phones will auto-reconnect if you start again)");
+      // Flush the response first, then exit; dropping the SSE sockets tells each
+      // phone to fall back to its reconnect loop.
+      setTimeout(() => process.exit(0), 30).unref?.();
       return;
     }
 
@@ -229,6 +249,7 @@ const server = createServer(async (req, res) => {
         if (settled) return;
         settled = true;
         pending.delete(prompt.promptId);
+        appendAudit({ tool: prompt.tool, summary: prompt.summary, cwd: prompt.cwd, sessionId: prompt.sessionId, decision: choice });
         broadcast({ type: "resolved", promptId: prompt.promptId, choice });
         json(res, 200, { ok: true, choice });
       };
@@ -239,6 +260,7 @@ const server = createServer(async (req, res) => {
         if (settled) return;
         settled = true;
         pending.delete(prompt.promptId);
+        appendAudit({ tool: prompt.tool, summary: prompt.summary, cwd: prompt.cwd, sessionId: prompt.sessionId, decision: "aborted" });
         broadcast({ type: "resolved", promptId: prompt.promptId, choice: "aborted" });
       });
 
@@ -283,5 +305,19 @@ async function printPairing() {
   console.log(`  Key stored at: ${keyPath()}   (re-pair anytime with:  npm start -- --pair)`);
   console.log(`\n  Waiting for hook events on POST /hook …\n`);
 }
+
+server.on("error", (err) => {
+  if (err && err.code === "EADDRINUSE") {
+    console.error(
+      `\n  ✗ Port ${PORT} is already in use — awaykit is probably already running.\n` +
+      `\n    • Check it:    npm run status` +
+      `\n    • Restart it:  npm run restart` +
+      `\n    • Stop it:     npm run stop` +
+      `\n    • Or pick another port:  AWAYKIT_PORT=4600 npm start\n`);
+    process.exit(1);
+  }
+  console.error(`\n  ✗ awaykit server error: ${(err && err.message) || err}\n`);
+  process.exit(1);
+});
 
 server.listen(PORT, HOST, () => { printPairing(); });

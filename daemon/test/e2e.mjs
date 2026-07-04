@@ -145,6 +145,13 @@ try {
   ok(hookRes.choice === "approve", "hook (the agent) receives the approve decision");
   ok(await until(() => got.some((p) => p.type === "resolved" && p.promptId === prompt.promptId), 1000), "resolved event broadcast to the stream");
 
+  // audit log — every decision is recorded, append-only
+  const auditLines = readFileSync(join(HOME, "audit.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const lastAudit = auditLines[auditLines.length - 1];
+  ok(lastAudit.decision === "approve" && lastAudit.summary === "Run: npm test" && typeof lastAudit.ts === "number", "the decision is recorded in the append-only audit log");
+  const auditResp = await req("GET", "/audit");
+  ok(auditResp.status === 200 && JSON.parse(auditResp.body).entries.some((e) => e.decision === "approve"), "GET /audit returns the log over loopback");
+
   // tamper check: flipping a ciphertext byte must not decrypt
   const sealed = seal(key, { hi: 1 });
   const tampered = sealed.slice(0, -2) + (sealed.slice(-2) === "AA" ? "AB" : "AA");

@@ -45,6 +45,9 @@ honest limits.
   so a device on the LAN cannot inject fake tool prompts.
 - **Connection is the switch.** With no paired phone connected, the daemon does
   not intercept — Claude Code uses its normal on-laptop permission flow.
+- **Append-only audit log.** Every decision (approve / deny / aborted) is
+  recorded as a JSON line at `~/.awaykit/audit.log` — a local record of what you
+  approved while away. Read recent entries over loopback via `GET /audit`.
 
 **What v0.1 defends against:** a passive Wi-Fi sniffer (sees only ciphertext);
 an unauthorized device on the same network (no `K` ⇒ can't read events, can't

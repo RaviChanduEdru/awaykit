@@ -1,6 +1,6 @@
 {
   "name": "awaykit",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Control your laptop's AI coding sessions from your phone — self-hosted, E2E encrypted.",
   "type": "module",
   "bin": {
@@ -11,7 +11,10 @@
     "node": ">=18"
   },
   "scripts": {
-    "start": "node src/daemon.js",
+    "start": "node src/ctl.js start",
+    "stop": "node src/ctl.js stop",
+    "restart": "node src/ctl.js restart",
+    "status": "node src/ctl.js status",
     "hook": "node src/hook.js",
     "test": "node test/e2e.mjs"
   },
