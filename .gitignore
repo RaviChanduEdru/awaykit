@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+.env
+*.log
+.DS_Store
+Thumbs.db
+.expo/
+*.keystore
+# never commit keys
+*.key
+keys/
+
+# per-machine Claude Code settings (permission grants, absolute paths) — keep
+# these out of the public repo. Commit shared config (commands, agents) if wanted.
+.claude/settings.json
+.claude/settings.local.json

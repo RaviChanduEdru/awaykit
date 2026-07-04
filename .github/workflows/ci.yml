@@ -1,0 +1,30 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Syntax check (zero-dep, so no install needed)
+        run: |
+          node --check daemon/src/daemon.js
+          node --check daemon/src/hook.js
+
+      - name: Boot daemon and health-check
+        run: |
+          node daemon/src/daemon.js &
+          DAEMON=$!
+          sleep 1
+          curl -sf http://127.0.0.1:4517/health
+          kill $DAEMON
+
+      - name: Hook fail-safe when daemon is down (must exit 0, no output)
+        run: |
+          OUT=$(echo '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}' \
+            | AWAYKIT_URL=http://127.0.0.1:9 node daemon/src/hook.js)
+          test -z "$OUT" && echo "fail-safe OK (empty output)"

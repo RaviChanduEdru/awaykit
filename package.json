@@ -1,0 +1,9 @@
+{
+  "name": "awaykit-monorepo",
+  "private": true,
+  "workspaces": ["daemon"],
+  "scripts": {
+    "start": "npm start -w daemon",
+    "daemon": "node daemon/src/daemon.js"
+  }
+}

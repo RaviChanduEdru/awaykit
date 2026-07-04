@@ -1,0 +1,16 @@
+{
+  "name": "awaykit",
+  "version": "0.0.1",
+  "description": "Control your laptop's AI coding sessions from your phone — self-hosted, E2E encrypted.",
+  "type": "module",
+  "bin": { "awaykit": "src/daemon.js" },
+  "main": "src/daemon.js",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node src/daemon.js",
+    "hook": "node src/hook.js"
+  },
+  "keywords": ["ai", "coding-agent", "claude-code", "remote", "mobile", "e2e-encryption", "self-hosted"],
+  "license": "MIT",
+  "files": ["src", "public"]
+}

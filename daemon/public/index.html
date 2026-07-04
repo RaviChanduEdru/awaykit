@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0f17" />
+  <title>awaykit</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --surface: #141b26;
+      --surface-2: #1c2635;
+      --border: #263245;
+      --text: #e6edf6;
+      --muted: #8695a8;
+      --accent: #4f8cff;
+      --ok: #2ecc71;
+      --ok-dim: #12331f;
+      --no: #ff5c5c;
+      --no-dim: #331414;
+      --warn: #ffb020;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+      min-height: 100vh;
+    }
+    header {
+      position: sticky; top: 0; z-index: 10;
+      display: flex; align-items: center; gap: 10px;
+      padding: 14px 16px;
+      background: rgba(11,15,23,0.85);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+    }
+    header .logo { font-weight: 700; letter-spacing: -0.02em; font-size: 17px; }
+    header .logo span { color: var(--accent); }
+    .status { margin-left: auto; display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--no); box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+    .dot.live { background: var(--ok); animation: pulse 2s infinite; }
+    @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(46,204,113,.5);} 70%{ box-shadow:0 0 0 7px rgba(46,204,113,0);} 100%{box-shadow:0 0 0 0 rgba(46,204,113,0);} }
+    main { max-width: 640px; margin: 0 auto; padding: 16px; }
+    .section-label { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 22px 4px 10px; }
+    .empty { color: var(--muted); text-align: center; padding: 40px 20px; font-size: 14px; }
+    .empty .big { font-size: 34px; margin-bottom: 8px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 14px;
+      animation: rise .18s ease-out;
+    }
+    @keyframes rise { from { opacity: 0; transform: translateY(8px);} to {opacity:1; transform:none;} }
+    .card .tool {
+      display: inline-block; font-size: 12px; font-weight: 600;
+      color: var(--accent); background: rgba(79,140,255,.12);
+      padding: 3px 9px; border-radius: 999px; margin-bottom: 10px;
+    }
+    .card .summary { font-size: 15px; font-weight: 600; margin: 2px 0 6px; word-break: break-word; }
+    .card pre {
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 9px; padding: 10px 12px; margin: 8px 0 14px;
+      font: 12.5px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      color: #cdd8e6; overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+      max-height: 220px;
+    }
+    .card .meta { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+    .actions { display: flex; gap: 10px; }
+    button {
+      flex: 1; border: 0; border-radius: 11px; padding: 13px; font-size: 15px; font-weight: 600;
+      color: #fff; cursor: pointer; transition: transform .08s, opacity .15s; font-family: inherit;
+    }
+    button:active { transform: scale(.97); }
+    button.approve { background: var(--ok); color: #04160c; }
+    button.deny { background: var(--no); color: #1a0505; }
+    button:disabled { opacity: .5; }
+
+    .feed-item {
+      display: flex; gap: 10px; align-items: flex-start;
+      padding: 10px 12px; border: 1px solid var(--border);
+      border-radius: 10px; margin-bottom: 8px; background: var(--surface);
+      font-size: 13.5px;
+    }
+    .feed-item .ic { font-size: 15px; line-height: 1.4; }
+    .feed-item .body { flex: 1; min-width: 0; }
+    .feed-item .t { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+    .feed-item.approved { border-color: var(--ok-dim); }
+    .feed-item.denied { border-color: var(--no-dim); }
+    .feed-item .txt { word-break: break-word; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">away<span>kit</span></div>
+    <div class="status"><span id="dot" class="dot"></span><span id="statusText">connecting…</span></div>
+  </header>
+  <main>
+    <div class="section-label">Waiting for you</div>
+    <div id="pending"></div>
+    <div id="pendingEmpty" class="empty"><div class="big">✅</div>Nothing needs your approval right now.<br />Your agent is running free.</div>
+
+    <div class="section-label">Activity</div>
+    <div id="feed"></div>
+    <div id="feedEmpty" class="empty" style="padding:20px">No activity yet.</div>
+  </main>
+
+  <script>
+    const pendingEl = document.getElementById('pending');
+    const pendingEmpty = document.getElementById('pendingEmpty');
+    const feedEl = document.getElementById('feed');
+    const feedEmpty = document.getElementById('feedEmpty');
+    const dot = document.getElementById('dot');
+    const statusText = document.getElementById('statusText');
+    const cards = new Map(); // promptId -> element
+
+    function fmtTime(ts) {
+      try { return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+      catch { return ''; }
+    }
+    function refreshEmpties() {
+      pendingEmpty.style.display = cards.size ? 'none' : 'block';
+      feedEmpty.style.display = feedEl.children.length ? 'none' : 'block';
+    }
+    function pushFeed(icon, text, cls) {
+      const item = document.createElement('div');
+      item.className = 'feed-item' + (cls ? ' ' + cls : '');
+      item.innerHTML = `<div class="ic"></div><div class="body"><div class="txt"></div><div class="t"></div></div>`;
+      item.querySelector('.ic').textContent = icon;
+      item.querySelector('.txt').textContent = text;
+      item.querySelector('.t').textContent = fmtTime(Date.now());
+      feedEl.prepend(item);
+      while (feedEl.children.length > 40) feedEl.removeChild(feedEl.lastChild);
+      refreshEmpties();
+    }
+
+    function addCard(p) {
+      if (cards.has(p.promptId)) return;
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <div class="tool"></div>
+        <div class="summary"></div>
+        <pre></pre>
+        <div class="meta"></div>
+        <div class="actions">
+          <button class="deny">Deny</button>
+          <button class="approve">Approve</button>
+        </div>`;
+      card.querySelector('.tool').textContent = p.tool || 'permission';
+      card.querySelector('.summary').textContent = p.summary || 'Agent needs your approval';
+      const pre = card.querySelector('pre');
+      if (p.detail) { pre.textContent = p.detail; } else { pre.remove(); }
+      card.querySelector('.meta').textContent =
+        (p.cwd ? p.cwd + '  ·  ' : '') + 'session ' + (p.sessionId || '?').slice(0, 8);
+
+      const approve = card.querySelector('.approve');
+      const deny = card.querySelector('.deny');
+      const respond = async (choice) => {
+        approve.disabled = deny.disabled = true;
+        try {
+          await fetch('/respond', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ promptId: p.promptId, choice })
+          });
+        } catch (e) { approve.disabled = deny.disabled = false; return; }
+        removeCard(p.promptId);
+        pushFeed(choice === 'approve' ? '✅' : '⛔',
+          (choice === 'approve' ? 'Approved' : 'Denied') + ': ' + (p.summary || p.tool),
+          choice === 'approve' ? 'approved' : 'denied');
+      };
+      approve.onclick = () => respond('approve');
+      deny.onclick = () => respond('deny');
+
+      cards.set(p.promptId, card);
+      pendingEl.appendChild(card);
+      refreshEmpties();
+    }
+    function removeCard(promptId) {
+      const el = cards.get(promptId);
+      if (el) { el.remove(); cards.delete(promptId); }
+      refreshEmpties();
+    }
+
+    function setStatus(live) {
+      dot.classList.toggle('live', live);
+      statusText.textContent = live ? 'connected' : 'reconnecting…';
+    }
+
+    function connect() {
+      const es = new EventSource('/events');
+      es.onopen = () => setStatus(true);
+      es.onerror = () => setStatus(false);
+      es.addEventListener('snapshot', (e) => {
+        const { pending } = JSON.parse(e.data);
+        cards.forEach((_, id) => removeCard(id));
+        (pending || []).forEach(addCard);
+      });
+      es.addEventListener('prompt', (e) => {
+        const p = JSON.parse(e.data);
+        addCard(p);
+        if (navigator.vibrate) navigator.vibrate(80);
+      });
+      es.addEventListener('resolved', (e) => {
+        const { promptId } = JSON.parse(e.data);
+        removeCard(promptId); // resolved elsewhere (e.g. timed out or answered on another device)
+      });
+      es.addEventListener('notify', (e) => {
+        const { icon, text } = JSON.parse(e.data);
+        pushFeed(icon || '🔔', text || 'notification');
+      });
+    }
+    connect();
+  </script>
+</body>
+</html>

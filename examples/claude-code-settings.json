@@ -1,0 +1,41 @@
+{
+  "//": "awaykit hooks for Claude Code — Milestone 0. Copy the `hooks` block into",
+  "//1": "~/.claude/settings.json (all projects) or a project's .claude/settings.json.",
+  "//2": "Change the path in each `command` to where you cloned awaykit. On Windows,",
+  "//3": "use forward slashes so you don't have to escape backslashes in JSON.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"C:/path/to/awaykit/daemon/src/hook.js\"",
+            "timeout": 3600
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"C:/path/to/awaykit/daemon/src/hook.js\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"C:/path/to/awaykit/daemon/src/hook.js\""
+          }
+        ]
+      }
+    ]
+  }
+}
