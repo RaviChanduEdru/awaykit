@@ -89,6 +89,22 @@ export function open(key, sealed) {
   }
 }
 
+// ---- relay room id -----------------------------------------------------------
+
+/**
+ * Opaque room identifier for the zero-knowledge relay: a purpose-tagged hash of
+ * K. Both devices derive it independently; the relay (and anyone watching it)
+ * learns nothing about K from it. Uses nacl.hash (SHA-512) because the same
+ * primitive exists in the vendored browser tweetnacl.
+ */
+export function roomIdFromKey(key) {
+  const tag = new TextEncoder().encode("awaykit-room-v1");
+  const buf = new Uint8Array(tag.length + key.length);
+  buf.set(tag, 0);
+  buf.set(key, tag.length);
+  return b64urlEncode(nacl.hash(buf).slice(0, 16));
+}
+
 // ---- pairing proof + ephemeral key agreement (forward secrecy) --------------
 //
 // The long-term key K only authenticates the handshake; it never encrypts

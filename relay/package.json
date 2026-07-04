@@ -1,0 +1,12 @@
+{
+  "name": "awaykit-relay",
+  "version": "0.4.0",
+  "description": "Zero-knowledge ciphertext relay for awaykit — remote access with no VPN; forwards sealed blobs it cannot read.",
+  "type": "module",
+  "main": "server.js",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT"
+}
