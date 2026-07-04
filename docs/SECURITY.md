@@ -12,7 +12,7 @@ If a design decision here is wrong, please open an issue.
    (E2E encryption with mutual authentication).
 4. No third party — including us — ever holds keys or plaintext.
 
-## Implemented today (v0.1)
+## Implemented today (v0.2)
 
 The sections below (`Pairing`, `Transport`, `Authorization scopes`) describe the
 **target** design. Here is what the code actually does **right now**, and its
@@ -25,15 +25,22 @@ honest limits.
   `http://<lan-ip>:<port>/#k=<key>` — the key rides in the URL **fragment**,
   which browsers never send to the server, so `K` is not transmitted over the
   (plain-HTTP) network during pairing. Re-pair anytime with `npm start -- --pair`.
+- **Forward secrecy via per-session ephemeral keys.** `K` only *authenticates*
+  the handshake; it never encrypts channel data. On each connection, phone and
+  daemon run an X25519 exchange (each side's ephemeral public key is sealed under
+  `K`, so an attacker without `K` can't inject their own) and derive a throwaway
+  session key. Recording ciphertext and *later* stealing `K` does **not** decrypt
+  past sessions — the ephemeral secrets are already gone.
 - **Authenticated encryption on every message.** Each phone⇄daemon message is
-  sealed with NaCl `secretbox` (XSalsa20-Poly1305) under `K`, with a random
-  nonce. The SSE stream uses a single opaque event type, so even the *kind* of
-  message is hidden. The same primitives run in the browser via a vendored
-  `tweetnacl` (WebCrypto's `subtle` is unavailable over plain HTTP, so we bundle
-  a pure-JS lib; only `crypto.getRandomValues`, which works on HTTP, is used).
+  sealed with NaCl `secretbox` (XSalsa20-Poly1305) under the **session key**,
+  with a random nonce. The SSE stream uses a single opaque event type, so even
+  the *kind* of message is hidden. The same primitives run in the browser via a
+  vendored `tweetnacl` (WebCrypto's `subtle` is unavailable over plain HTTP, so
+  we bundle a pure-JS lib; only `crypto.getRandomValues`, which works on HTTP, is
+  used).
 - **Session gate.** `/events` and `/respond` require a session cookie that is
-  only issued after the phone proves it holds `K` (a sealed, time-fresh proof to
-  `POST /session`).
+  only issued after the phone proves it holds `K` (a sealed, time-fresh proof
+  carrying its ephemeral public key, to `POST /session`).
 - **Loopback-only `/hook`.** The hook endpoint rejects non-loopback connections,
   so a device on the LAN cannot inject fake tool prompts.
 - **Connection is the switch.** With no paired phone connected, the daemon does
@@ -48,13 +55,12 @@ auth tag rejects it).
 
 - **App shell served over plain HTTP.** The HTML/JS is delivered unencrypted, so
   an *active* on-path attacker (ARP spoof / rogue AP) could tamper with the
-  client code before `K` is ever used. Full integrity needs HTTPS with a pinned
-  cert, or the native app. v0.1 stops passive attackers, not active MITM.
-- **No forward secrecy.** A single long-lived symmetric `K`; compromising it
-  exposes past captured ciphertext. The target design (X25519 per-session keys,
-  `crypto_secretstream`) fixes this.
+  client code before any key is used. Full integrity needs HTTPS with a pinned
+  cert, or the native app. Today's crypto stops passive attackers, not active MITM.
 - **Key at rest on the phone** lives in `localStorage`. A device-scoped biometric
   gate is future work.
+- **LAN only.** Remote access (working from a different network) needs the
+  zero-knowledge relay or a VPN — see the target `Transport` section below.
 
 ## Pairing
 

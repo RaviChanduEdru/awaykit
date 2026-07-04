@@ -56,7 +56,7 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the threat model.
 - **`relay/`** — optional, self-hostable; forwards ciphertext + wakes your phone
   with push notifications. Never sees plaintext.
 
-## Try it now (v0.1 — paired & encrypted)
+## Try it now (v0.2 — paired, encrypted, forward-secret)
 
 **Approve your Claude Code tool calls from your phone**, over your own Wi-Fi, on
 an end-to-end encrypted channel that only *your* paired phone can use.
@@ -69,8 +69,9 @@ Scan the QR with your phone, wire up the hook, and every `Bash`/`Write`/`Edit`
 the agent tries pops up as a tap-to-approve card — decrypted on your device.
 Full walkthrough: **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
 
-> 🔒 v0.1 encrypts + authenticates the phone⇄laptop channel (NaCl secretbox);
-> only a device with your paired key can connect, read events, or approve. It does
+> 🔒 The phone⇄laptop channel is encrypted + authenticated (NaCl secretbox) with
+> **per-session forward secrecy** (X25519 ephemeral keys) — only your paired phone
+> can connect, and leaking the long-term key can't decrypt past sessions. It does
 > **not** yet stop an *active* on-path attacker (the app shell is served over plain
 > HTTP) — trusted networks for now. Honest threat model: [SECURITY.md](docs/SECURITY.md).
 
@@ -79,7 +80,8 @@ Full walkthrough: **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
 🚧 **Early development.**
 - ✅ **Milestone 0** — hook → daemon → phone approval card → approve/deny unblocks the agent (LAN).
 - ✅ **v0.1** — QR pairing + end-to-end encrypted, authenticated channel (only your paired phone connects).
-- ⏭️ Next: push notifications via optional relay; forward secrecy (X25519 per-session keys) + integrity vs active MITM.
+- ✅ **v0.2** — forward secrecy: per-session X25519 ephemeral keys, so leaking the long-term key can't decrypt past sessions.
+- ⏭️ Next: remote access (work from any network); push notifications; integrity vs active MITM.
 
 Star/watch the repo to follow along.
 
@@ -87,9 +89,10 @@ Star/watch the repo to follow along.
 
 - [x] Milestone 0 — end-to-end approve/deny loop over LAN (hook + daemon + web client)
 - [x] v0.1 — QR pairing + encrypted, authenticated channel (NaCl secretbox)
-- [ ] v0.2 — push notifications via optional relay (ciphertext only)
-- [ ] v0.3 — agent-agnostic adapters (Codex, Cursor CLI, OpenCode)
-- [ ] v0.4 — multi-session dashboard, session history
+- [x] v0.2 — forward secrecy (per-session X25519 ephemeral keys)
+- [ ] v0.3 — remote access: zero-knowledge relay (ciphertext only) or VPN
+- [ ] v0.4 — push notifications; integrity vs active MITM (HTTPS / native app)
+- [ ] v0.5 — agent-agnostic adapters (Codex, Cursor CLI, OpenCode)
 - [ ] v1.0 — audited security model, reproducible builds
 
 ## Contributing

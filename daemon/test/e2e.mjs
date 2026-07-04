@@ -91,13 +91,24 @@ try {
   const badKey = nacl.randomBytes(32);
   ok((await req("POST", "/session", { body: { proof: seal(badKey, { p: "awaykit-session", t: Date.now() }) } })).status === 401, "wrong key => pairing proof rejected (401)");
 
-  const sess = await req("POST", "/session", { body: { proof: seal(key, { p: "awaykit-session", t: Date.now() }) } });
-  ok(sess.status === 200 && sess.headers["set-cookie"], "correct key => session cookie issued");
+  // authenticated ephemeral X25519 handshake -> per-session forward secrecy
+  const eph = nacl.box.keyPair();
+  const sess = await req("POST", "/session", { body: { proof: seal(key, { p: "awaykit-session", t: Date.now(), epk: b64e(eph.publicKey) }) } });
+  ok(sess.status === 200 && sess.headers["set-cookie"], "correct key + ephemeral pubkey => session established");
   const cookie = sess.headers["set-cookie"][0].split(";")[0];
+  const edk = openS(key, JSON.parse(sess.body).edk);
+  ok(edk && edk.dpk, "daemon returns its ephemeral pubkey, sealed under K");
+  const sk = nacl.box.before(b64d(edk.dpk), eph.secretKey);
 
-  const got = [];
-  const stream = await sseConnect(cookie, (data) => { const p = openS(key, data); if (p) got.push(p); });
-  ok(await until(() => got.some((p) => p.type === "snapshot"), 1000), "SSE opens and sends an encrypted snapshot");
+  const eph2 = nacl.box.keyPair();
+  const sess2 = await req("POST", "/session", { body: { proof: seal(key, { p: "awaykit-session", t: Date.now(), epk: b64e(eph2.publicKey) }) } });
+  const sk2 = nacl.box.before(b64d(openS(key, JSON.parse(sess2.body).edk).dpk), eph2.secretKey);
+  ok(b64e(sk) !== b64e(sk2), "each session derives a distinct ephemeral key");
+
+  const got = [], raw = [];
+  const stream = await sseConnect(cookie, (data) => { raw.push(data); const p = openS(sk, data); if (p) got.push(p); });
+  ok(await until(() => got.some((p) => p.type === "snapshot"), 1000), "SSE opens and sends a snapshot sealed with the session key");
+  ok(raw.length > 0 && openS(key, raw[0]) === null && openS(sk, raw[0]) !== null, "channel uses the ephemeral session key, NOT the long-term key K (forward secrecy)");
   ok(await until(async () => (await req("GET", "/health")).body.includes('"clients":1'), 1000), "daemon counts the paired client");
 
   const hookP = req("POST", "/hook", { body: { kind: "permission", tool: "Bash", summary: "Run: npm test", detail: "npm test", sessionId: "sess1" } });
@@ -105,7 +116,7 @@ try {
   const prompt = got.find((p) => p.type === "prompt");
   ok(prompt.summary === "Run: npm test", "decrypted prompt content matches what the hook sent");
 
-  const resp = await req("POST", "/respond", { headers: { cookie }, body: { c: seal(key, { promptId: prompt.promptId, choice: "approve" }) } });
+  const resp = await req("POST", "/respond", { headers: { cookie }, body: { c: seal(sk, { promptId: prompt.promptId, choice: "approve" }) } });
   ok(resp.status === 200, "sealed approve accepted");
   const hookRes = JSON.parse((await hookP).body);
   ok(hookRes.choice === "approve", "hook (the agent) receives the approve decision");

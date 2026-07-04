@@ -1,5 +1,5 @@
 /**
- * awaykit daemon — v0.1 (paired + encrypted).
+ * awaykit daemon — v0.2 (paired + encrypted + per-session forward secrecy).
  *
  *   Claude Code PreToolUse hook ──POST /hook (loopback only)──▶ daemon
  *                                                                 │ holds agent blocked
@@ -33,7 +33,7 @@ import { dirname, join } from "node:path";
 import { networkInterfaces } from "node:os";
 import { randomUUID, randomBytes } from "node:crypto";
 import QRCode from "qrcode";
-import { loadOrCreateKey, regenerateKey, keyPath, seal, open, verifyProof, b64urlEncode } from "./crypto.js";
+import { loadOrCreateKey, regenerateKey, keyPath, seal, open, openProof, newEphemeralKeyPair, deriveSessionKey, b64urlEncode } from "./crypto.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "public");
@@ -93,24 +93,24 @@ function parseCookies(req) {
   return out;
 }
 
-function newSession() {
+function newSession(sk) {
   const sid = b64urlEncode(randomBytes(24));
-  sessions.set(sid, Date.now() + SESSION_TTL_MS);
+  sessions.set(sid, { exp: Date.now() + SESSION_TTL_MS, sk });
   return sid;
 }
 
-function authed(req) {
+function sessionOf(req) {
   const sid = parseCookies(req)["awaykit_session"];
-  if (!sid) return false;
-  const exp = sessions.get(sid);
-  if (!exp) return false;
-  if (Date.now() > exp) { sessions.delete(sid); return false; }
-  return true;
+  if (!sid) return null;
+  const s = sessions.get(sid);
+  if (!s) return null;
+  if (Date.now() > s.exp) { sessions.delete(sid); return null; }
+  return s;
 }
 
-/** Send one sealed SSE message (single "m" event hides the message type too). */
+/** Send one sealed SSE message, using this client's ephemeral session key. */
 function sseSealed(res, payload) {
-  res.write(`event: m\ndata: ${seal(KEY, payload)}\n\n`);
+  res.write(`event: m\ndata: ${seal(res.awaykitSK, payload)}\n\n`);
 }
 
 function broadcast(payload) {
@@ -154,9 +154,15 @@ const server = createServer(async (req, res) => {
     // --- pairing handshake: phone proves it holds K, gets a session cookie ---
     if (req.method === "POST" && pathname === "/session") {
       const { proof } = await readBody(req);
-      if (!proof || !verifyProof(KEY, proof)) { json(res, 401, { ok: false, error: "bad pairing proof" }); return; }
-      const sid = newSession();
-      json(res, 200, { ok: true }, {
+      const claim = proof ? openProof(KEY, proof) : null;
+      if (!claim || !claim.epk) { json(res, 401, { ok: false, error: "bad pairing proof" }); return; }
+      // Ephemeral X25519 exchange, authenticated by K, gives per-session forward
+      // secrecy: the channel uses `sk`, never K. The ephemeral secret is dropped
+      // when this scope returns.
+      const eph = newEphemeralKeyPair();
+      const sk = deriveSessionKey(claim.epk, eph.secretKey);
+      const sid = newSession(sk);
+      json(res, 200, { ok: true, edk: seal(KEY, { dpk: b64urlEncode(eph.publicKey) }) }, {
         "set-cookie": `awaykit_session=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`,
       });
       return;
@@ -164,7 +170,9 @@ const server = createServer(async (req, res) => {
 
     // --- encrypted event stream to the paired phone ---
     if (req.method === "GET" && pathname === "/events") {
-      if (!authed(req)) { json(res, 401, { ok: false, error: "pair first" }); return; }
+      const sess = sessionOf(req);
+      if (!sess) { json(res, 401, { ok: false, error: "pair first" }); return; }
+      res.awaykitSK = sess.sk;
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive" });
       res.write(": awaykit stream open\n\n");
       sseSealed(res, { type: "snapshot", pending: [...pending.values()].map(publicPrompt) });
@@ -176,9 +184,10 @@ const server = createServer(async (req, res) => {
 
     // --- phone answers a prompt (sealed body) ---
     if (req.method === "POST" && pathname === "/respond") {
-      if (!authed(req)) { json(res, 401, { ok: false, error: "pair first" }); return; }
+      const sess = sessionOf(req);
+      if (!sess) { json(res, 401, { ok: false, error: "pair first" }); return; }
       const body = await readBody(req);
-      const msg = body && body.c ? open(KEY, body.c) : null;
+      const msg = body && body.c ? open(sess.sk, body.c) : null;
       if (!msg) { json(res, 400, { ok: false, error: "undecipherable" }); return; }
       const { promptId, choice } = msg;
       const entry = pending.get(promptId);
@@ -259,8 +268,8 @@ async function printPairing() {
   const ip = ips[0] || "127.0.0.1";
   const pairURL = `http://${ip}:${PORT}/#k=${b64urlEncode(KEY)}`;
 
-  console.log(`\n  awaykit daemon — v0.1 (paired + encrypted)`);
-  console.log(`  ─────────────────────────────────────────`);
+  console.log(`\n  awaykit daemon — v0.2 (paired · encrypted · forward-secret)`);
+  console.log(`  ──────────────────────────────────────────────────────────`);
   console.log(`  local:   http://127.0.0.1:${PORT}`);
   if (ips.length) console.log(`  phone:   http://${ip}:${PORT}   (same Wi-Fi)`);
   console.log(`\n  Scan to pair your phone (this QR contains your secret key):\n`);

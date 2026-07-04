@@ -89,17 +89,33 @@ export function open(key, sealed) {
   }
 }
 
-// ---- pairing proof ----------------------------------------------------------
+// ---- pairing proof + ephemeral key agreement (forward secrecy) --------------
+//
+// The long-term key K only authenticates the handshake; it never encrypts
+// channel data. Each session runs a fresh X25519 exchange and derives a
+// throwaway session key. So a passive attacker who records ciphertext and
+// *later* steals K still cannot decrypt past sessions — the ephemeral secrets
+// are gone.
 
-/** What the phone seals to prove it holds K when opening a session. */
-export function makeProof(key) {
-  return seal(key, { p: SESSION_PURPOSE, t: Date.now() });
+/** Fresh X25519 ephemeral keypair for one session. */
+export function newEphemeralKeyPair() {
+  return nacl.box.keyPair(); // { publicKey: Uint8Array(32), secretKey: Uint8Array(32) }
 }
 
-/** Verify a session proof: decrypts under K and is time-fresh. */
-export function verifyProof(key, sealed, maxAgeMs = 120_000) {
+/** Derive the shared session key from our secret + their public key (base64url). */
+export function deriveSessionKey(theirPublicB64, mySecret) {
+  return nacl.box.before(b64urlDecode(theirPublicB64), mySecret); // 32-byte secretbox key
+}
+
+/**
+ * Open + validate a session proof sealed under the long-term key K. Returns the
+ * decoded object `{ p, t, epk }` if it decrypts and is time-fresh, else null.
+ * `epk` is the phone's base64url ephemeral public key.
+ */
+export function openProof(key, sealed, maxAgeMs = 120_000) {
   const obj = open(key, sealed);
-  if (!obj || obj.p !== SESSION_PURPOSE || typeof obj.t !== "number") return false;
+  if (!obj || obj.p !== SESSION_PURPOSE || typeof obj.t !== "number") return null;
   const age = Date.now() - obj.t;
-  return age >= -maxAgeMs && age <= maxAgeMs;
+  if (age < -maxAgeMs || age > maxAgeMs) return null;
+  return obj;
 }

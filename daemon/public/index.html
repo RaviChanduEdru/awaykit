@@ -128,7 +128,8 @@
       const stored = localStorage.getItem("awaykit_key");
       return stored ? b64urlDecode(stored) : null;
     }
-    let key = loadKey();
+    let key = loadKey();          // long-term pairing key (authenticates handshake)
+    let sessionKey = null;        // per-connection ephemeral key (encrypts the channel)
 
     // ---------- DOM ----------
     const pendingEl=document.getElementById("pending"), pendingEmpty=document.getElementById("pendingEmpty");
@@ -163,7 +164,7 @@
       const approve=card.querySelector(".approve"), deny=card.querySelector(".deny");
       const respond=async(choice)=>{
         approve.disabled=deny.disabled=true;
-        try { await fetch("/respond",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({c:seal(key,{promptId:p.promptId,choice})})}); }
+        try { await fetch("/respond",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({c:seal(sessionKey,{promptId:p.promptId,choice})})}); }
         catch { approve.disabled=deny.disabled=false; return; }
         removeCard(p.promptId);
         pushFeed(choice==="approve"?"✅":"⛔",(choice==="approve"?"Approved":"Denied")+": "+(p.summary||p.tool), choice==="approve"?"approved":"denied");
@@ -185,16 +186,22 @@
     // ---------- pairing handshake + encrypted stream ----------
     let es = null, reconnectT = null;
     async function pair(){
-      const proof = seal(key, { p:"awaykit-session", t: Date.now() });
+      // Fresh ephemeral X25519 keypair per session → forward secrecy.
+      const eph = nacl.box.keyPair();
+      const proof = seal(key, { p:"awaykit-session", t: Date.now(), epk: b64urlEncode(eph.publicKey) });
       const r = await fetch("/session", { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({ proof }) });
       if (r.status === 401) { localStorage.removeItem("awaykit_key"); key=null; showGate("Pairing expired", "The laptop's key changed. Re-scan the QR from your terminal to pair again."); return false; }
-      return r.ok;
+      if (!r.ok) return false;
+      let dk = null; try { dk = openSealed(key, (await r.json()).edk); } catch { dk = null; }
+      if (!dk || !dk.dpk) return false;
+      sessionKey = nacl.box.before(b64urlDecode(dk.dpk), eph.secretKey);
+      return true;
     }
     function connect(){
       es = new EventSource("/events");
       es.onopen = () => setStatus(true, "connected");
       es.onerror = () => { setStatus(false); try{es.close();}catch{} clearTimeout(reconnectT); reconnectT=setTimeout(start, 2000); };
-      es.addEventListener("m", (e) => { const p = openSealed(key, e.data); if (p) dispatch(p); });
+      es.addEventListener("m", (e) => { const p = openSealed(sessionKey, e.data); if (p) dispatch(p); });
     }
     async function start(){
       if (!key) { showGate(); return; }
