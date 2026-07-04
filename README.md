@@ -61,11 +61,11 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the threat model.
 - **`relay/`** — optional, self-hostable; forwards ciphertext + wakes your phone
   with push notifications. Never sees plaintext.
 
-## Try it now (v0.3 — paired · encrypted · forward-secret · works anywhere)
+## Try it now (v0.4 — paired · encrypted · chat steering · works anywhere)
 
-**Approve your Claude Code tool calls from your phone** on an end-to-end
-encrypted channel that only *your* paired phone can use — on your Wi-Fi, or from
-any network over a VPN.
+**Approve — and steer — your Claude Code sessions from your phone** on an
+end-to-end encrypted channel that only *your* paired phone can use — on your
+Wi-Fi, or from any network over a VPN.
 
 ```bash
 npm install && npm start        # prints a pairing QR
@@ -73,6 +73,10 @@ npm install && npm start        # prints a pairing QR
 
 Scan the QR with your phone, wire up the hook, and every `Bash`/`Write`/`Edit`
 the agent tries pops up as a tap-to-approve card — decrypted on your device.
+It's a conversation, not just a gate: **Deny with a typed note** and Claude
+reads it as feedback ("don't run that — do X instead"); when the agent finishes
+a turn, a **"what next?"** card lets you send the next instruction so it keeps
+going while you're out.
 Full walkthrough: **[docs/QUICKSTART.md](docs/QUICKSTART.md)**. Away from home?
 Put both devices on a VPN and it works from anywhere — **[docs/REMOTE.md](docs/REMOTE.md)**.
 
@@ -111,6 +115,7 @@ phone automatically, no re-scan needed (the pairing key persists).
 - ✅ **v0.1** — QR pairing + end-to-end encrypted, authenticated channel (only your paired phone connects).
 - ✅ **v0.2** — forward secrecy: per-session X25519 ephemeral keys, so leaking the long-term key can't decrypt past sessions.
 - ✅ **v0.3** — remote access: use it from any network over a VPN; auto-detects the VPN address for pairing.
+- ✅ **v0.4** — chat steering: Deny carries your typed note to Claude as feedback; "turn finished — what next?" cards keep the agent going with your instructions.
 - ⏭️ Next: zero-knowledge relay (remote without a VPN); push notifications; integrity vs active MITM.
 
 Star/watch the repo to follow along.
@@ -121,9 +126,10 @@ Star/watch the repo to follow along.
 - [x] v0.1 — QR pairing + encrypted, authenticated channel (NaCl secretbox)
 - [x] v0.2 — forward secrecy (per-session X25519 ephemeral keys)
 - [x] v0.3 — remote access from any network over a VPN (Tailscale/WireGuard)
-- [ ] v0.4 — zero-knowledge relay (remote without a VPN, ciphertext only)
-- [ ] v0.5 — push notifications; integrity vs active MITM (HTTPS / native app)
-- [ ] v0.6 — agent-agnostic adapters (Codex, Cursor CLI, OpenCode)
+- [x] v0.4 — chat steering (deny with instructions; continue-on-stop with your next prompt)
+- [ ] v0.5 — zero-knowledge relay (remote without a VPN, ciphertext only)
+- [ ] v0.6 — push notifications; integrity vs active MITM (HTTPS / native app)
+- [ ] v0.7 — agent-agnostic adapters (Codex, Cursor CLI, OpenCode)
 - [ ] v1.0 — audited security model, reproducible builds
 
 ## Contributing

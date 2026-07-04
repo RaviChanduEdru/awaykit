@@ -5,7 +5,10 @@
  * Wire this as a PreToolUse / Notification / Stop hook (see docs/QUICKSTART.md).
  * It reads the hook event on stdin, forwards it to the local awaykit daemon,
  * and — for a permission request — waits for your phone's decision, then prints
- * the matching permission decision back to Claude Code on stdout.
+ * the matching permission decision back to Claude Code on stdout. A Deny can
+ * carry a typed note, which Claude reads as feedback and adapts to. When the
+ * agent finishes a turn (Stop), your phone gets a "what next?" card — answering
+ * with instructions holds the turn open and the agent keeps going with them.
  *
  * Fail-safe: if the daemon is unreachable, this exits 0 with no decision, so
  * Claude Code just falls back to its normal on-laptop permission prompt. Your
@@ -49,8 +52,28 @@ async function main() {
       process.exit(0);
     }
 
-    if (event === "Stop" || event === "SubagentStop") {
-      await postDaemon({ kind: "stop", text: "Agent finished a turn" });
+    if (event === "SubagentStop") {
+      await postDaemon({ kind: "notify", icon: "🏁", text: "A subagent finished" });
+      process.exit(0);
+    }
+
+    if (event === "Stop") {
+      // Ask the phone "what next?". If it answers with an instruction, hold the
+      // turn open (decision: "block") — Claude Code treats the reason as the
+      // user's next marching orders. No phone / no answer / "let it stop" →
+      // exit silently and the agent stops normally.
+      const result = await postDaemon({
+        kind: "stop",
+        sessionId: ev.session_id || "",
+        cwd: ev.cwd || "",
+        stopActive: !!ev.stop_hook_active,
+      });
+      if (result && result.choice === "continue") {
+        process.stdout.write(JSON.stringify({
+          decision: "block",
+          reason: (result.note || "Continue with the next logical step.") + " (sent from your phone via awaykit)",
+        }));
+      }
       process.exit(0);
     }
 
@@ -65,13 +88,18 @@ async function main() {
       });
 
       const choice = result && result.choice;
+      const note = (result && result.note) || "";
       if (choice === "approve" || choice === "deny") {
-        // Current Claude Code PreToolUse decision format.
+        // Current Claude Code PreToolUse decision format. On a deny, the reason
+        // is shown to Claude as feedback — so a typed note becomes a steering
+        // message ("don't run that, do X instead") the agent acts on.
         process.stdout.write(JSON.stringify({
           hookSpecificOutput: {
             hookEventName: "PreToolUse",
             permissionDecision: choice === "approve" ? "allow" : "deny",
-            permissionDecisionReason: `${choice === "approve" ? "Approved" : "Denied"} from phone via awaykit`,
+            permissionDecisionReason: choice === "approve"
+              ? "Approved from phone via awaykit"
+              : "Denied from phone via awaykit" + (note ? ` — the user says: ${note}` : ""),
           },
         }));
       }

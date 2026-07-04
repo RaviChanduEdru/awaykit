@@ -72,8 +72,20 @@ function sseConnect(cookie, onMsg) {
   });
 }
 
+/** Run the real hook.js as Claude Code would: JSON event on stdin, decision JSON on stdout. */
+function runHook(input) {
+  return new Promise((resolve) => {
+    const h = spawn(process.execPath, [join(__dirname, "..", "src", "hook.js")], {
+      env: { ...process.env, AWAYKIT_URL: BASE },
+    });
+    let out = ""; h.stdout.on("data", (c) => (out += c));
+    h.on("exit", (code) => resolve({ out, code }));
+    h.stdin.write(JSON.stringify(input)); h.stdin.end();
+  });
+}
+
 const child = spawn(process.execPath, [DAEMON], {
-  env: { ...process.env, AWAYKIT_HOME: HOME, AWAYKIT_PORT: String(PORT), AWAYKIT_HOST: "127.0.0.1" },
+  env: { ...process.env, AWAYKIT_HOME: HOME, AWAYKIT_PORT: String(PORT), AWAYKIT_HOST: "127.0.0.1", AWAYKIT_STOP_WAIT_MS: "1500" },
   stdio: "ignore",
 });
 function done(code) { try { child.kill(); } catch {} process.exit(code); }
@@ -128,6 +140,10 @@ try {
   const sk2 = nacl.box.before(b64d(openS(key, JSON.parse(sess2.body).edk).dpk), eph2.secretKey);
   ok(b64e(sk) !== b64e(sk2), "each session derives a distinct ephemeral key");
 
+  // with no phone connected, a turn-end question passes straight through
+  const idleStop = JSON.parse((await req("POST", "/hook", { body: { kind: "stop" } })).body);
+  ok(idleStop.choice === null, "turn-end with no phone connected passes through instantly (agent stops normally)");
+
   const got = [], raw = [];
   const stream = await sseConnect(cookie, (data) => { raw.push(data); const p = openS(sk, data); if (p) got.push(p); });
   ok(await until(() => got.some((p) => p.type === "snapshot"), 1000), "SSE opens and sends a snapshot sealed with the session key");
@@ -151,6 +167,57 @@ try {
   ok(lastAudit.decision === "approve" && lastAudit.summary === "Run: npm test" && typeof lastAudit.ts === "number", "the decision is recorded in the append-only audit log");
   const auditResp = await req("GET", "/audit");
   ok(auditResp.status === 200 && JSON.parse(auditResp.body).entries.some((e) => e.decision === "approve"), "GET /audit returns the log over loopback");
+
+  // ---- chat steering (v0.4) -------------------------------------------------
+
+  // deny + typed note → the note rides back to the hook (Claude reads it as feedback)
+  const hookP2 = req("POST", "/hook", { body: { kind: "permission", tool: "Bash", summary: "Run: npm publish", detail: "npm publish", sessionId: "sess1" } });
+  ok(await until(() => got.some((p) => p.type === "prompt" && p.summary === "Run: npm publish"), 2000), "second permission prompt delivered");
+  const p2 = got.find((p) => p.type === "prompt" && p.summary === "Run: npm publish");
+  await req("POST", "/respond", { headers: { cookie }, body: { c: seal(sk, { promptId: p2.promptId, choice: "deny", note: "use npm pack first, don't publish yet" }) } });
+  const hookRes2 = JSON.parse((await hookP2).body);
+  ok(hookRes2.choice === "deny" && hookRes2.note === "use npm pack first, don't publish yet", "deny carries your typed note back to the hook");
+
+  // turn-end card → "continue + instruction" flows back to the Stop hook
+  const stopP = req("POST", "/hook", { body: { kind: "stop", sessionId: "sess1" } });
+  ok(await until(() => got.some((p) => p.type === "prompt" && p.kind === "stop"), 2000), "turn-end question reaches the phone as a card");
+  const sp = got.find((p) => p.type === "prompt" && p.kind === "stop");
+  ok(typeof sp.expiresAt === "number" && sp.expiresAt > Date.now(), "turn-end card carries its answer deadline");
+  ok((await req("POST", "/respond", { headers: { cookie }, body: { c: seal(sk, { promptId: sp.promptId, choice: "approve" }) } })).status === 400, "approve is rejected on a turn-end card (must be continue|stop)");
+  await req("POST", "/respond", { headers: { cookie }, body: { c: seal(sk, { promptId: sp.promptId, choice: "continue", note: "now add tests for the audit log" }) } });
+  const stopRes = JSON.parse((await stopP).body);
+  ok(stopRes.choice === "continue" && stopRes.note === "now add tests for the audit log", "'continue + instruction' flows back to the Stop hook");
+  const audit2 = JSON.parse((await req("GET", "/audit")).body).entries;
+  ok(audit2.some((e) => e.decision === "continue" && (e.note || "").includes("audit log")), "your continue instruction lands in the audit log");
+
+  // unanswered turn-end question expires (AWAYKIT_STOP_WAIT_MS=1500 in this test)
+  const t0 = Date.now();
+  const stopRes2 = JSON.parse((await req("POST", "/hook", { body: { kind: "stop" } })).body);
+  ok(stopRes2.choice === null && Date.now() - t0 >= 1200, "unanswered turn-end question expires and lets the agent stop");
+  ok(await until(() => got.some((p) => p.type === "resolved" && p.choice === "expired"), 1000), "expiry is broadcast so the card disappears");
+
+  // ---- the real hook.js binary, end to end ----------------------------------
+
+  // PreToolUse: deny + note becomes a permissionDecision Claude Code understands
+  const hookRun = runHook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "rm -rf build" }, session_id: "sessH", cwd: "/tmp" });
+  ok(await until(() => got.some((p) => p.type === "prompt" && p.summary === "Run: rm -rf build"), 3000), "real hook.js delivers a PreToolUse card");
+  const hp = got.find((p) => p.type === "prompt" && p.summary === "Run: rm -rf build");
+  await req("POST", "/respond", { headers: { cookie }, body: { c: seal(sk, { promptId: hp.promptId, choice: "deny", note: "clean with git clean instead" }) } });
+  const hout = JSON.parse((await hookRun).out);
+  ok(hout.hookSpecificOutput.permissionDecision === "deny" && hout.hookSpecificOutput.permissionDecisionReason.includes("git clean instead"), "hook.js emits deny + your note for Claude to read");
+
+  // Stop: continue + text becomes {decision:block, reason} — the agent keeps going
+  const stopRun = runHook({ hook_event_name: "Stop", session_id: "sessH" });
+  ok(await until(() => got.filter((p) => p.type === "prompt" && p.kind === "stop").length >= 3, 3000), "real hook.js delivers the turn-end card");
+  const sp2 = got.filter((p) => p.type === "prompt" && p.kind === "stop").pop();
+  await req("POST", "/respond", { headers: { cookie }, body: { c: seal(sk, { promptId: sp2.promptId, choice: "continue", note: "continue: wire the next feature" }) } });
+  const sout = JSON.parse((await stopRun).out);
+  ok(sout.decision === "block" && sout.reason.includes("wire the next feature"), "hook.js emits {decision:block, reason} so the agent continues with your text");
+
+  // SubagentStop stays a lightweight notification
+  const subRun = runHook({ hook_event_name: "SubagentStop", session_id: "sessH" });
+  ok(await until(() => got.some((p) => p.type === "notify" && /subagent/i.test(p.text || "")), 3000), "SubagentStop arrives as a feed notification, not a card");
+  ok((await subRun).code === 0, "SubagentStop hook exits cleanly");
 
   // tamper check: flipping a ciphertext byte must not decrypt
   const sealed = seal(key, { hi: 1 });

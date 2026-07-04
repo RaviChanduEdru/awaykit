@@ -1,14 +1,19 @@
 /**
- * awaykit daemon — v0.3 (paired + encrypted + forward secrecy + remote-ready).
+ * awaykit daemon — v0.4 (paired + encrypted + forward secrecy + chat steering).
  *
  *   Claude Code PreToolUse hook ──POST /hook (loopback only)──▶ daemon
  *                                                                 │ holds agent blocked
  *                          sealed SSE  event: m / data: <cipher>  ▼
  *                                                          paired phone
  *                                                          (has key K from QR)
- *                          POST /respond {c:<cipher>} ◀── Approve / Deny
+ *                          POST /respond {c:<cipher>} ◀── Approve / Deny (+ note)
  *                                                                 │
  *                             decision ◀────────────────────────┘
+ *
+ * Chat steering (v0.4): a Deny can carry a typed note that Claude reads as
+ * feedback, and the Stop hook turns "agent finished a turn" into a question —
+ * the phone gets a "what next?" card for AWAYKIT_STOP_WAIT_MS; answering
+ * "continue + instructions" holds the turn open and hands the agent your text.
  *
  * Security model (v0.1):
  *  - One shared key K, created on first run, delivered to the phone via the QR
@@ -46,6 +51,9 @@ const PUBLIC_HOST = process.env.AWAYKIT_PUBLIC_HOST || "";
 
 const KEY = REPAIR ? regenerateKey() : loadOrCreateKey();
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+/** How long a "turn finished — what next?" card waits for an answer before the
+ *  agent is allowed to stop normally. Keep it under the Stop hook's timeout. */
+const STOP_WAIT_MS = Number(process.env.AWAYKIT_STOP_WAIT_MS || 45_000);
 
 /** promptId -> { prompt, decide(choice) } */
 const pending = new Map();
@@ -123,7 +131,7 @@ function broadcast(payload) {
 }
 
 function publicPrompt(p) {
-  return { promptId: p.promptId, tool: p.tool, summary: p.summary, detail: p.detail, sessionId: p.sessionId, cwd: p.cwd, ts: p.ts };
+  return { promptId: p.promptId, kind: p.kind, tool: p.tool, summary: p.summary, detail: p.detail, sessionId: p.sessionId, cwd: p.cwd, ts: p.ts, expiresAt: p.expiresAt || 0 };
 }
 
 // ---- request routing -------------------------------------------------------
@@ -212,10 +220,12 @@ const server = createServer(async (req, res) => {
       const msg = body && body.c ? open(sess.sk, body.c) : null;
       if (!msg) { json(res, 400, { ok: false, error: "undecipherable" }); return; }
       const { promptId, choice } = msg;
+      const note = typeof msg.note === "string" ? msg.note.trim().slice(0, 2000) : "";
       const entry = pending.get(promptId);
       if (!entry) { json(res, 404, { ok: false, error: "unknown or already-resolved prompt" }); return; }
-      if (choice !== "approve" && choice !== "deny") { json(res, 400, { ok: false, error: "choice must be approve|deny" }); return; }
-      entry.decide(choice);
+      const allowed = entry.kind === "stop" ? ["continue", "stop"] : ["approve", "deny"];
+      if (!allowed.includes(choice)) { json(res, 400, { ok: false, error: `choice must be ${allowed.join("|")}` }); return; }
+      entry.decide(choice, note);
       json(res, 200, { ok: true });
       return;
     }
@@ -225,8 +235,8 @@ const server = createServer(async (req, res) => {
       if (!isLoopback(req)) { res.writeHead(403); res.end(); return; }
       const ev = await readBody(req);
 
-      if (ev.kind === "notify" || ev.kind === "stop") {
-        broadcast({ type: "notify", icon: ev.icon || (ev.kind === "stop" ? "🏁" : "🔔"), text: ev.text || ev.summary || "agent event" });
+      if (ev.kind === "notify") {
+        broadcast({ type: "notify", icon: ev.icon || "🔔", text: ev.text || ev.summary || "agent event" });
         json(res, 200, { ok: true });
         return;
       }
@@ -234,39 +244,60 @@ const server = createServer(async (req, res) => {
       // No paired phone connected => behave like plain Claude Code (no interception).
       if (clients.size === 0) { json(res, 200, { ok: true, choice: null, reason: "no phone connected" }); return; }
 
+      // Two waitable kinds: "permission" (approve/deny a tool call) and "stop"
+      // (the agent finished its turn — continue with instructions, or let it stop).
+      const isStop = ev.kind === "stop";
       const prompt = {
         promptId: randomUUID(),
-        tool: ev.tool || "permission",
-        summary: ev.summary || "Agent needs your approval",
+        kind: isStop ? "stop" : "permission",
+        tool: isStop ? "Turn finished" : (ev.tool || "permission"),
+        summary: isStop
+          ? (ev.stopActive ? "Agent finished again — keep going?" : "Agent finished its turn — what next?")
+          : (ev.summary || "Agent needs your approval"),
         detail: ev.detail || "",
         sessionId: ev.sessionId || "",
         cwd: ev.cwd || "",
         ts: Date.now(),
+        expiresAt: isStop ? Date.now() + STOP_WAIT_MS : 0,
       };
 
       let settled = false;
-      const finish = (choice) => {
-        if (settled) return;
+      let expiry = null;
+      /** Mark resolved exactly once: clear state + audit. Returns false if late. */
+      const settle = (decision, note) => {
+        if (settled) return false;
         settled = true;
+        if (expiry) clearTimeout(expiry);
         pending.delete(prompt.promptId);
-        appendAudit({ tool: prompt.tool, summary: prompt.summary, cwd: prompt.cwd, sessionId: prompt.sessionId, decision: choice });
+        appendAudit({ tool: prompt.tool, summary: prompt.summary, cwd: prompt.cwd, sessionId: prompt.sessionId, decision, ...(note ? { note } : {}) });
+        return true;
+      };
+      const finish = (choice, note = "") => {
+        if (!settle(choice, note)) return;
         broadcast({ type: "resolved", promptId: prompt.promptId, choice });
-        json(res, 200, { ok: true, choice });
+        json(res, 200, { ok: true, choice, note });
       };
       prompt.decide = finish;
-      pending.set(prompt.promptId, { ...prompt, decide: finish });
+      pending.set(prompt.promptId, prompt);
+
+      // A turn-end question mustn't hold the agent forever: unanswered, it
+      // expires and the agent stops normally (fail-safe, like everything else).
+      if (isStop) {
+        expiry = setTimeout(() => {
+          if (!settle("expired")) return;
+          broadcast({ type: "resolved", promptId: prompt.promptId, choice: "expired" });
+          json(res, 200, { ok: true, choice: null, reason: "no answer from phone" });
+        }, STOP_WAIT_MS);
+      }
 
       req.on("close", () => {
-        if (settled) return;
-        settled = true;
-        pending.delete(prompt.promptId);
-        appendAudit({ tool: prompt.tool, summary: prompt.summary, cwd: prompt.cwd, sessionId: prompt.sessionId, decision: "aborted" });
+        if (!settle("aborted")) return;
         broadcast({ type: "resolved", promptId: prompt.promptId, choice: "aborted" });
       });
 
       broadcast({ type: "prompt", ...publicPrompt(prompt) });
       console.log(`[awaykit] → phone: ${prompt.tool} — ${prompt.summary}`);
-      return; // response sent later by finish()
+      return; // response sent later by finish() / the expiry timer
     }
 
     res.writeHead(404, { "content-type": "text/plain" });
@@ -281,7 +312,7 @@ async function printPairing() {
   const host = pickPairingHost(ifaces, PUBLIC_HOST);
   const pairURL = `http://${host.ip}:${PORT}/#k=${b64urlEncode(KEY)}`;
 
-  console.log(`\n  awaykit daemon — v0.3 (paired · encrypted · forward-secret)`);
+  console.log(`\n  awaykit daemon — v0.4 (paired · encrypted · chat steering)`);
   console.log(`  ──────────────────────────────────────────────────────────`);
   console.log(`  local:   http://127.0.0.1:${PORT}`);
   for (const c of candidateHosts(ifaces)) {

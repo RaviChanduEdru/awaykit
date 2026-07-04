@@ -95,7 +95,7 @@ forward slashes to avoid JSON escaping pain:
     ],
     "Stop": [
       { "hooks": [
-        { "type": "command", "command": "node \"C:/path/to/awaykit/daemon/src/hook.js\"" } ] }
+        { "type": "command", "command": "node \"C:/path/to/awaykit/daemon/src/hook.js\"", "timeout": 120 } ] }
     ]
   }
 }
@@ -105,8 +105,12 @@ forward slashes to avoid JSON escaping pain:
   The default cap is 600s (10 min); bump it to an hour so you have time to answer
   from your phone while you're out. If it times out, Claude Code falls back to its
   normal prompt.
-- **`Notification`** and **`Stop`** are optional — they feed the phone's
-  *Activity* log ("agent needs input", "agent finished a turn").
+- **`Stop`** is where the chat steering lives: when the agent finishes a turn,
+  your phone gets a **"what next?"** card for 45 s. Type an instruction and tap
+  **Continue ▶** — the agent keeps going with it. Ignore it (or tap **Let it
+  stop**) and the turn ends normally. The `timeout: 120` gives the hook room to
+  wait out the card.
+- **`Notification`** is optional — it feeds the phone's *Activity* log.
 
 Restart Claude Code (or run `/hooks`) so it picks up the new hooks.
 
@@ -117,8 +121,16 @@ Restart Claude Code (or run `/hooks`) so it picks up the new hooks.
 3. Your phone buzzes and shows an **approval card** (decrypted on-device): the
    tool and the exact command. Tap **Approve** → Claude Code unblocks. Tap
    **Deny** → the tool call is refused and Claude sees why.
+4. **Steer with text**: type a note on the card before tapping **Deny** — e.g.
+   *"don't publish, run the tests first"* — and Claude reads it as feedback and
+   adapts. It's a chat, not just a gate.
+5. **Keep it going**: when the agent finishes its turn, the phone shows a
+   **"turn finished — what next?"** card. Type *"continue with the next
+   feature"* and tap **Continue ▶** (or just press Enter) — the agent picks it
+   up as its next instruction. Unanswered, the card expires and the agent stops
+   normally.
 
-That's the loop: laptop agent → encrypted channel → your phone → your decision → laptop agent.
+That's the loop: laptop agent → encrypted channel → your phone → your decision (or instructions) → laptop agent.
 
 ## Configuration
 
@@ -128,6 +140,7 @@ That's the loop: laptop agent → encrypted channel → your phone → your deci
 | `AWAYKIT_HOST` | `0.0.0.0` | Bind address (all interfaces so the phone can reach it) |
 | `AWAYKIT_URL`  | `http://127.0.0.1:4517` | Where the **hook** finds the daemon |
 | `AWAYKIT_HOME` | `~/.awaykit` | Where the pairing key is stored |
+| `AWAYKIT_STOP_WAIT_MS` | `45000` | How long the "turn finished — what next?" card waits for an answer before the agent stops normally. Keep it below the `Stop` hook's `timeout` |
 | `AWAYKIT_PUBLIC_HOST` | _(auto-detect)_ | Host/IP to encode in the pairing QR — set to your VPN address for remote access ([REMOTE.md](REMOTE.md)) |
 
 Re-pair all devices (rotate the key): `npm start -- --pair`.

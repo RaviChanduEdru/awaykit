@@ -44,11 +44,16 @@
     .card .summary { font-size: 15px; font-weight: 600; margin: 2px 0 6px; word-break: break-word; }
     .card pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; margin: 8px 0 14px; font: 12.5px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: #cdd8e6; overflow-x: auto; white-space: pre-wrap; word-break: break-word; max-height: 220px; }
     .card .meta { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+    .card .meta .left { color: var(--warn); font-weight: 600; }
+    .card textarea { width: 100%; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; color: var(--text); font-family: inherit; font-size: 14px; line-height: 1.4; padding: 10px 12px; margin: 0 0 12px; resize: none; min-height: 44px; }
+    .card textarea:focus { outline: none; border-color: var(--accent); }
+    .card textarea::placeholder { color: var(--muted); }
     .actions { display: flex; gap: 10px; }
     button { flex: 1; border: 0; border-radius: 11px; padding: 13px; font-size: 15px; font-weight: 600; color: #fff; cursor: pointer; transition: transform .08s, opacity .15s; font-family: inherit; }
     button:active { transform: scale(.97); }
     button.approve { background: var(--ok); color: #04160c; }
     button.deny { background: var(--no); color: #1a0505; }
+    button.ghost { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
     button:disabled { opacity: .5; }
 
     .feed-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; background: var(--surface); font-size: 13.5px; }
@@ -182,31 +187,59 @@
     }
     function addCard(p){
       if (cards.has(p.promptId)) return;
+      const isStop = p.kind === "stop";
       const card=document.createElement("div"); card.className="card";
       card.innerHTML=`<div class="tool"></div><div class="summary"></div><pre></pre><div class="meta"></div>
-        <div class="actions"><button class="deny">Deny</button><button class="approve">Approve</button></div>`;
-      card.querySelector(".tool").textContent=p.tool||"permission";
-      card.querySelector(".summary").textContent=p.summary||"Agent needs your approval";
+        <textarea rows="1" enterkeyhint="send"></textarea>
+        <div class="actions"><button class="no"></button><button class="approve yes"></button></div>`;
+      card.querySelector(".tool").textContent=isStop?"🏁 turn finished":(p.tool||"permission");
+      card.querySelector(".summary").textContent=p.summary||(isStop?"Agent finished its turn — what next?":"Agent needs your approval");
       const pre=card.querySelector("pre"); if(p.detail){pre.textContent=p.detail;} else {pre.remove();}
-      card.querySelector(".meta").textContent=(p.cwd?p.cwd+"  ·  ":"")+"session "+(p.sessionId||"?").slice(0,8);
-      const approve=card.querySelector(".approve"), deny=card.querySelector(".deny");
+      const meta=card.querySelector(".meta");
+      const metaBase=(p.cwd?p.cwd+"  ·  ":"")+"session "+(p.sessionId||"?").slice(0,8);
+      meta.textContent=metaBase;
+      const ta=card.querySelector("textarea");
+      ta.placeholder=isStop?"What next? e.g. “continue with the next feature”":"Optional note — sent to the agent with Deny";
+      const yes=card.querySelector(".yes"), no=card.querySelector(".no");
+      yes.textContent=isStop?"Continue ▶":"Approve";
+      no.textContent=isStop?"Let it stop":"Deny";
+      no.classList.add(isStop?"ghost":"deny");
+      // Live countdown on turn-end cards: unanswered, the agent stops normally.
+      if(isStop && p.expiresAt){
+        const tick=()=>{
+          const left=Math.max(0,Math.ceil((p.expiresAt-Date.now())/1000));
+          meta.innerHTML=`<span class="left"></span> · ${metaBase}`;
+          meta.querySelector(".left").textContent=`answers for ${left}s`;
+          if(left<=0) clearInterval(card._cd);
+        };
+        card._cd=setInterval(tick,1000); tick();
+      }
       const respond=async(choice)=>{
-        approve.disabled=deny.disabled=true;
-        try { await fetch("/respond",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({c:seal(sessionKey,{promptId:p.promptId,choice})})}); }
-        catch { approve.disabled=deny.disabled=false; return; }
+        const note=ta.value.trim();
+        yes.disabled=no.disabled=ta.disabled=true;
+        try { await fetch("/respond",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({c:seal(sessionKey,{promptId:p.promptId,choice,note})})}); }
+        catch { yes.disabled=no.disabled=ta.disabled=false; return; }
         removeCard(p.promptId);
-        pushFeed(choice==="approve"?"✅":"⛔",(choice==="approve"?"Approved":"Denied")+": "+(p.summary||p.tool), choice==="approve"?"approved":"denied");
+        if(choice==="approve") pushFeed("✅","Approved: "+(p.summary||p.tool),"approved");
+        else if(choice==="deny") pushFeed("⛔",note?`Denied — “${note}”`:"Denied: "+(p.summary||p.tool),"denied");
+        else if(choice==="continue") pushFeed("💬",`You: ${note||"Continue"}`,"approved");
+        else pushFeed("🛑","Let it stop","denied");
       };
-      approve.onclick=()=>respond("approve"); deny.onclick=()=>respond("deny");
+      yes.onclick=()=>respond(isStop?"continue":"approve");
+      no.onclick=()=>respond(isStop?"stop":"deny");
+      // Enter sends "Continue + text" on a turn-end card (Shift+Enter = newline).
+      if(isStop) ta.onkeydown=(e)=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); respond("continue"); } };
       cards.set(p.promptId, card); pendingEl.appendChild(card); refreshEmpties();
     }
-    function removeCard(id){ const el=cards.get(id); if(el){el.remove();cards.delete(id);} refreshEmpties(); }
+    function removeCard(id){ const el=cards.get(id); if(el){ if(el._cd)clearInterval(el._cd); el.remove(); cards.delete(id);} refreshEmpties(); }
 
     function dispatch(p){
       switch(p.type){
         case "snapshot": cards.forEach((_,id)=>removeCard(id)); (p.pending||[]).forEach(addCard); break;
         case "prompt": addCard(p); if(navigator.vibrate) navigator.vibrate(80); break;
-        case "resolved": removeCard(p.promptId); break;
+        case "resolved":
+          if(p.choice==="expired" && cards.has(p.promptId)) pushFeed("⌛","Turn ended — no answer in time");
+          removeCard(p.promptId); break;
         case "notify": pushFeed(p.icon||"🔔", p.text||"notification"); break;
       }
     }

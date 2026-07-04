@@ -32,7 +32,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"C:/path/to/awaykit/daemon/src/hook.js\""
+            "command": "node \"C:/path/to/awaykit/daemon/src/hook.js\"",
+            "timeout": 120
           }
         ]
       }
