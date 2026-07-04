@@ -1,13 +1,14 @@
 {
   "name": "awaykit-monorepo",
   "private": true,
-  "workspaces": ["daemon"],
+  "workspaces": ["daemon", "relay"],
   "scripts": {
     "start": "npm start -w daemon",
     "stop": "npm run stop -w daemon",
     "restart": "npm run restart -w daemon",
     "status": "npm run status -w daemon",
     "daemon": "node daemon/src/daemon.js",
+    "relay": "node relay/server.js",
     "test": "npm test -w daemon"
   }
 }

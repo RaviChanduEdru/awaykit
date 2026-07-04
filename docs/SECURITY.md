@@ -48,6 +48,14 @@ honest limits.
 - **Append-only audit log.** Every decision (approve / deny / aborted) is
   recorded as a JSON line at `~/.awaykit/audit.log` — a local record of what you
   approved while away. Read recent entries over loopback via `GET /audit`.
+- **Zero-knowledge relay (optional, `AWAYKIT_RELAY`).** For remote access with
+  no VPN: the daemon holds an *outbound* connection to a self-hosted relay (no
+  inbound ports), and the phone reaches the relay from anywhere. Rooms are keyed
+  by an irreversible hash of `K`; every payload is an opaque sealed blob using
+  the same forward-secret handshake as LAN mode. The relay learns timing,
+  direction, and size — never keys, never plaintext. Remote sessions ping every
+  25 s and expire after 90 s of silence, so "connection is the switch" stays
+  truthful remotely.
 
 **What v0.1 defends against:** a passive Wi-Fi sniffer (sees only ciphertext);
 an unauthorized device on the same network (no `K` ⇒ can't read events, can't
@@ -62,8 +70,10 @@ auth tag rejects it).
   cert, or the native app. Today's crypto stops passive attackers, not active MITM.
 - **Key at rest on the phone** lives in `localStorage`. A device-scoped biometric
   gate is future work.
-- **LAN only.** Remote access (working from a different network) needs the
-  zero-knowledge relay or a VPN — see the target `Transport` section below.
+- **Relay app-shell trust.** In relay mode the phone loads the app shell from
+  the relay host — host the relay behind HTTPS and treat that host as part of
+  your trust base (it can serve code, but it still never sees keys or plaintext
+  messages, which live in the URL fragment / on-device).
 
 ## Pairing
 

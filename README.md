@@ -116,7 +116,8 @@ phone automatically, no re-scan needed (the pairing key persists).
 - ✅ **v0.2** — forward secrecy: per-session X25519 ephemeral keys, so leaking the long-term key can't decrypt past sessions.
 - ✅ **v0.3** — remote access: use it from any network over a VPN; auto-detects the VPN address for pairing.
 - ✅ **v0.4** — chat steering: Deny carries your typed note to Claude as feedback; "turn finished — what next?" cards keep the agent going with your instructions.
-- ⏭️ Next: zero-knowledge relay (remote without a VPN); push notifications; integrity vs active MITM.
+- ✅ **v0.5** — zero-knowledge relay: remote access from anywhere with **no VPN and no open ports** — a self-hostable relay forwards sealed blobs it cannot read.
+- ⏭️ Next: push notifications; integrity vs active MITM; agent-agnostic adapters.
 
 Star/watch the repo to follow along.
 
@@ -127,7 +128,7 @@ Star/watch the repo to follow along.
 - [x] v0.2 — forward secrecy (per-session X25519 ephemeral keys)
 - [x] v0.3 — remote access from any network over a VPN (Tailscale/WireGuard)
 - [x] v0.4 — chat steering (deny with instructions; continue-on-stop with your next prompt)
-- [ ] v0.5 — zero-knowledge relay (remote without a VPN, ciphertext only)
+- [x] v0.5 — zero-knowledge relay (remote without a VPN, ciphertext only)
 - [ ] v0.6 — push notifications; integrity vs active MITM (HTTPS / native app)
 - [ ] v0.7 — agent-agnostic adapters (Codex, Cursor CLI, OpenCode)
 - [ ] v1.0 — audited security model, reproducible builds

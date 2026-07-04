@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import nacl from "tweetnacl";
 import { pickPairingHost, candidateHosts } from "../src/net.js";
 import { describe } from "../src/describe.js";
+import { roomIdFromKey } from "../src/crypto.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DAEMON = join(__dirname, "..", "src", "daemon.js");
@@ -41,14 +42,37 @@ let passed = 0;
 function ok(cond, label) { if (!cond) throw new Error("FAIL: " + label); passed++; console.log("  ✓ " + label); }
 async function until(fn, ms) { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await sleep(25); } return false; }
 
-function req(method, path, { headers = {}, body } = {}) {
+function reqTo(base, method, path, { headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
     const data = body != null ? JSON.stringify(body) : null;
     const h = { ...(data ? { "content-type": "application/json", "content-length": Buffer.byteLength(data) } : {}), ...headers };
-    const r = http.request(BASE + path, { method, headers: h }, (res) => {
+    const r = http.request(base + path, { method, headers: h }, (res) => {
       let buf = ""; res.on("data", (c) => (buf += c)); res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: buf }));
     });
     r.on("error", reject); if (data) r.write(data); r.end();
+  });
+}
+const req = (method, path, opts) => reqTo(BASE, method, path, opts);
+
+/** Subscribe to any awaykit SSE stream (daemon /events or relay /pull). */
+function sseRaw(fullUrl, headers, onMsg) {
+  return new Promise((resolve, reject) => {
+    const r = http.request(fullUrl, { headers }, (res) => {
+      if (res.statusCode !== 200) { reject(new Error("sse status " + res.statusCode)); return; }
+      let buf = "";
+      res.on("data", (c) => {
+        buf += c; let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const block = buf.slice(0, i); buf = buf.slice(i + 2);
+          if (block.startsWith("event: m")) {
+            const line = block.split("\n").find((l) => l.startsWith("data: "));
+            if (line) onMsg(line.slice(6));
+          }
+        }
+      });
+      resolve({ close: () => r.destroy() });
+    });
+    r.on("error", reject); r.end();
   });
 }
 function sseConnect(cookie, onMsg) {
@@ -88,7 +112,11 @@ const child = spawn(process.execPath, [DAEMON], {
   env: { ...process.env, AWAYKIT_HOME: HOME, AWAYKIT_PORT: String(PORT), AWAYKIT_HOST: "127.0.0.1", AWAYKIT_STOP_WAIT_MS: "1500" },
   stdio: "ignore",
 });
-function done(code) { try { child.kill(); } catch {} process.exit(code); }
+let relayProc = null, relayedDaemon = null;
+function done(code) {
+  for (const p of [child, relayProc, relayedDaemon]) { try { p && p.kill(); } catch {} }
+  process.exit(code);
+}
 child.on("exit", (c) => { if (c) { console.error("daemon exited early: " + c); process.exit(1); } });
 
 try {
@@ -218,6 +246,46 @@ try {
   const subRun = runHook({ hook_event_name: "SubagentStop", session_id: "sessH" });
   ok(await until(() => got.some((p) => p.type === "notify" && /subagent/i.test(p.text || "")), 3000), "SubagentStop arrives as a feed notification, not a card");
   ok((await subRun).code === 0, "SubagentStop hook exits cleanly");
+
+  // ---- zero-knowledge relay (v0.5): remote phone, no VPN ---------------------
+
+  const RELAY_PORT = 4598, RD_PORT = 4597;
+  const RELAY_BASE = `http://127.0.0.1:${RELAY_PORT}`, RD_BASE = `http://127.0.0.1:${RD_PORT}`;
+  relayProc = spawn(process.execPath, [join(__dirname, "..", "..", "relay", "server.js")], {
+    env: { ...process.env, PORT: String(RELAY_PORT), HOST: "127.0.0.1" }, stdio: "ignore",
+  });
+  ok(await until(async () => { try { return (await reqTo(RELAY_BASE, "GET", "/health")).status === 200; } catch { return false; } }, 5000), "relay server boots");
+
+  // a second daemon, same key (same HOME), linked outbound to the relay
+  relayedDaemon = spawn(process.execPath, [DAEMON], {
+    env: { ...process.env, AWAYKIT_HOME: HOME, AWAYKIT_PORT: String(RD_PORT), AWAYKIT_HOST: "127.0.0.1", AWAYKIT_RELAY: RELAY_BASE }, stdio: "ignore",
+  });
+  ok(await until(async () => { try { return (await reqTo(RD_BASE, "GET", "/health")).status === 200; } catch { return false; } }, 5000), "relay-linked daemon boots");
+
+  const room = roomIdFromKey(key);
+  ok(/^[A-Za-z0-9_-]{8,64}$/.test(room), "room id derives from K and is relay-safe (reveals nothing)");
+
+  // the "remote phone": talks ONLY to the relay
+  const rRaw = [];
+  const rStream = await sseRaw(`${RELAY_BASE}/pull?room=${room}&as=phone`, {}, (d) => rRaw.push(d));
+  const ephR = nacl.box.keyPair();
+  await reqTo(RELAY_BASE, "POST", "/push", { body: { room, to: "daemon", blob: seal(key, { p: "awaykit-session", t: Date.now(), epk: b64e(ephR.publicKey) }) } });
+  ok(await until(() => rRaw.some((b) => openS(key, b)?.dpk), 5000), "relay handshake: daemon answers with its ephemeral pubkey (sealed under K)");
+  const rsk = nacl.box.before(b64d(openS(key, rRaw.find((b) => openS(key, b)?.dpk)).dpk), ephR.secretKey);
+  ok(await until(() => rRaw.some((b) => openS(rsk, b)?.type === "snapshot"), 3000), "snapshot arrives through the relay, sealed with the session key");
+  ok(await until(async () => (await reqTo(RD_BASE, "GET", "/health")).body.includes('"clients":1'), 3000), "remote phone counts as a connected client (connection-is-the-switch works remotely)");
+
+  // real permission flow: hook on the laptop -> card on the remote phone -> approve back
+  const rHookP = reqTo(RD_BASE, "POST", "/hook", { body: { kind: "permission", tool: "Bash", summary: "Run: relay e2e", sessionId: "rsess" } });
+  ok(await until(() => rRaw.some((b) => openS(rsk, b)?.type === "prompt"), 4000), "hook prompt reaches the remote phone through the relay");
+  const rPrompt = rRaw.map((b) => openS(rsk, b)).find((p) => p && p.type === "prompt");
+  await reqTo(RELAY_BASE, "POST", "/push", { body: { room, to: "daemon", blob: seal(rsk, { promptId: rPrompt.promptId, choice: "approve", note: "from far away" }) } });
+  const rHookRes = JSON.parse((await rHookP).body);
+  ok(rHookRes.choice === "approve" && rHookRes.note === "from far away", "approval (with note) flows back through the relay and unblocks the hook");
+
+  // the zero-knowledge property, asserted: nothing on the relay wire was plaintext
+  ok(rRaw.length > 0 && rRaw.every((b) => { try { JSON.parse(b); return false; } catch { return true; } }), "relay carried only opaque ciphertext blobs");
+  rStream.close();
 
   // tamper check: flipping a ciphertext byte must not decrypt
   const sealed = seal(key, { hi: 1 });

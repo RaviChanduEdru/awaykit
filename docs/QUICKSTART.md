@@ -59,9 +59,10 @@ need to scan again.
 > prompts you normally on the laptop. Open the page when you leave; close it when
 > you're back.
 
-> **Use it from anywhere.** To approve commands off your home Wi-Fi, put both
-> devices on a VPN (Tailscale is easiest) — awaykit auto-detects the VPN address
-> for the QR. See **[REMOTE.md](REMOTE.md)**.
+> **Use it from anywhere.** Two options: a VPN (Tailscale — awaykit auto-detects
+> the address for the QR), or the **zero-knowledge relay** (`AWAYKIT_RELAY=…`) —
+> no VPN, no open ports, and the relay only ever sees ciphertext. See
+> **[REMOTE.md](REMOTE.md)**.
 
 ## 3. Wire the hook into Claude Code
 

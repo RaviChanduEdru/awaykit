@@ -41,6 +41,7 @@ import QRCode from "qrcode";
 import { loadOrCreateKey, regenerateKey, keyPath, seal, open, openProof, newEphemeralKeyPair, deriveSessionKey, b64urlEncode } from "./crypto.js";
 import { pickPairingHost, candidateHosts } from "./net.js";
 import { appendAudit, readAudit } from "./audit.js";
+import { startRelayClient } from "./relay-client.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "public");
@@ -48,6 +49,10 @@ const PORT = Number(process.env.AWAYKIT_PORT || 4517);
 const HOST = process.env.AWAYKIT_HOST || "0.0.0.0";
 const REPAIR = process.argv.includes("--pair") || process.env.AWAYKIT_REPAIR === "1";
 const PUBLIC_HOST = process.env.AWAYKIT_PUBLIC_HOST || "";
+/** Zero-knowledge relay URL (e.g. https://relay.example.com). When set, the
+ *  daemon holds an outbound link to it — remote access with no VPN and no
+ *  inbound ports; the relay sees only ciphertext. See relay/README.md. */
+const RELAY = (process.env.AWAYKIT_RELAY || "").replace(/\/+$/, "");
 
 const KEY = REPAIR ? regenerateKey() : loadOrCreateKey();
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -119,14 +124,14 @@ function sessionOf(req) {
   return s;
 }
 
-/** Send one sealed SSE message, using this client's ephemeral session key. */
-function sseSealed(res, payload) {
-  res.write(`event: m\ndata: ${seal(res.awaykitSK, payload)}\n\n`);
-}
-
+/**
+ * Every connected phone — local SSE or remote via relay — is a client object
+ * with sendSealed(payload): seal under that client's own session key, deliver
+ * over that client's own transport. broadcast() treats them identically.
+ */
 function broadcast(payload) {
   for (const c of clients) {
-    try { sseSealed(c, payload); } catch { /* dropped on next tick */ }
+    try { c.sendSealed(payload); } catch { /* dropped on next tick */ }
   }
 }
 
@@ -202,13 +207,13 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && pathname === "/events") {
       const sess = sessionOf(req);
       if (!sess) { json(res, 401, { ok: false, error: "pair first" }); return; }
-      res.awaykitSK = sess.sk;
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive" });
       res.write(": awaykit stream open\n\n");
-      sseSealed(res, { type: "snapshot", pending: [...pending.values()].map(publicPrompt) });
-      clients.add(res);
+      const client = { sendSealed: (payload) => { res.write(`event: m\ndata: ${seal(sess.sk, payload)}\n\n`); } };
+      client.sendSealed({ type: "snapshot", pending: [...pending.values()].map(publicPrompt) });
+      clients.add(client);
       const keepAlive = setInterval(() => { try { res.write(": ping\n\n"); } catch {} }, 25_000);
-      req.on("close", () => { clearInterval(keepAlive); clients.delete(res); });
+      req.on("close", () => { clearInterval(keepAlive); clients.delete(client); });
       return;
     }
 
@@ -310,21 +315,25 @@ const server = createServer(async (req, res) => {
 async function printPairing() {
   const ifaces = networkInterfaces();
   const host = pickPairingHost(ifaces, PUBLIC_HOST);
-  const pairURL = `http://${host.ip}:${PORT}/#k=${b64urlEncode(KEY)}`;
+  const pairURL = RELAY
+    ? `${RELAY}/#k=${b64urlEncode(KEY)}&via=relay`
+    : `http://${host.ip}:${PORT}/#k=${b64urlEncode(KEY)}`;
 
-  console.log(`\n  awaykit daemon — v0.4 (paired · encrypted · chat steering)`);
-  console.log(`  ──────────────────────────────────────────────────────────`);
+  console.log(`\n  awaykit daemon — v0.5 (paired · encrypted · steering · relay)`);
+  console.log(`  ────────────────────────────────────────────────────────────`);
   console.log(`  local:   http://127.0.0.1:${PORT}`);
   for (const c of candidateHosts(ifaces)) {
     const label = c.kind === "vpn" ? "remote" : "phone ";
     const reach = c.kind === "vpn" ? "any network via VPN" : "same Wi-Fi only";
     console.log(`  ${label}:  http://${c.ip}:${PORT}   (${reach} — ${c.iface})`);
   }
+  if (RELAY) console.log(`  relay :  ${RELAY}   (zero-knowledge — any network, no VPN)`);
 
-  const note = host.kind === "public" ? "AWAYKIT_PUBLIC_HOST"
+  const note = RELAY ? "zero-knowledge relay — reachable from anywhere, no VPN"
+    : host.kind === "public" ? "AWAYKIT_PUBLIC_HOST"
     : host.kind === "vpn" ? "VPN — reachable from anywhere"
     : "LAN only — for remote access see docs/REMOTE.md";
-  console.log(`\n  Pairing host: ${host.ip}  (${note})`);
+  console.log(`\n  Pairing host: ${RELAY || host.ip}  (${note})`);
   console.log(`  Scan to pair your phone (this QR contains your secret key):\n`);
   try {
     console.log(await QRCode.toString(pairURL, { type: "terminal", small: true }));
@@ -351,4 +360,23 @@ server.on("error", (err) => {
   process.exit(1);
 });
 
-server.listen(PORT, HOST, () => { printPairing(); });
+server.listen(PORT, HOST, () => {
+  printPairing();
+  if (RELAY) {
+    startRelayClient({
+      relayURL: RELAY,
+      key: KEY,
+      registerClient: (c) => clients.add(c),
+      unregisterClient: (c) => clients.delete(c),
+      // Mirrors /respond's validation: per-kind allowed choices + bounded note.
+      resolvePrompt: (promptId, choice, note) => {
+        const entry = pending.get(promptId);
+        if (!entry) return;
+        const allowed = entry.kind === "stop" ? ["continue", "stop"] : ["approve", "deny"];
+        if (!allowed.includes(choice)) return;
+        entry.decide(choice, (note || "").trim().slice(0, 2000));
+      },
+      snapshot: () => [...pending.values()].map(publicPrompt),
+    });
+  }
+});

@@ -17,8 +17,11 @@ jobs:
           node --check daemon/src/daemon.js
           node --check daemon/src/hook.js
           node --check daemon/src/crypto.js
+          node --check daemon/src/relay-client.js
+          node --check daemon/src/ctl.js
+          node --check relay/server.js
 
-      - name: End-to-end (pairing + encryption)
+      - name: End-to-end (pairing + encryption + steering + relay)
         run: npm test
 
       - name: Hook fail-safe when daemon is down (must exit 0, no output)

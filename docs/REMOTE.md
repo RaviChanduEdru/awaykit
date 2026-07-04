@@ -1,15 +1,42 @@
 # Remote access — use awaykit from any network
 
-Milestones 0–0.2 are **same-Wi-Fi only**. To approve commands when you're
-actually out (different Wi-Fi, mobile data), put your phone and laptop on the
-same **private network** with a VPN. awaykit auto-detects the VPN address and
-puts it in the pairing QR.
+Out of the box awaykit is **same-Wi-Fi only**. To approve commands when you're
+actually out (different Wi-Fi, mobile data), pick one of two paths:
 
-> **Never port-forward `4517` to the public internet.** The app shell is served
-> over plain HTTP; exposing it publicly is unsafe. A VPN keeps the daemon private
-> *and* gives you an encrypted, authenticated tunnel.
+| | **Zero-knowledge relay** | **VPN (Tailscale/WireGuard)** |
+|---|---|---|
+| Setup | host one tiny Node server | install VPN on both devices |
+| Laptop inbound ports | none (outbound only) | VPN handles it |
+| Third party sees | ciphertext, timing, size | nothing (your tailnet) |
+| Works behind strict NAT | ✅ | ✅ |
 
-## Recommended: Tailscale (easiest)
+> **Never port-forward `4517` to the public internet.** The daemon is not meant
+> to be publicly exposed. Use the relay or a VPN.
+
+## Option A: zero-knowledge relay (no VPN)
+
+Host [`relay/server.js`](../relay/README.md) anywhere — a $3 VPS, a free-tier
+container, a Raspberry Pi. Zero dependencies. **Put it behind HTTPS** (that also
+protects the app shell it serves to your phone).
+
+```bash
+# on the relay host
+node relay/server.js                    # listens on :4600 (PORT to change)
+
+# on the laptop
+AWAYKIT_RELAY=https://relay.example.com npm start
+```
+
+The daemon connects **outbound** to the relay (no inbound ports, no firewall
+rules on the laptop) and the pairing QR now points at the relay — scan it from
+your phone **anywhere**.
+
+What the relay can and cannot see: rooms are identified by a hash of your
+pairing key (irreversible), and every message is an opaque sealed blob — the
+same forward-secret protocol as LAN mode. The relay learns timing, direction,
+and size. Never keys, never plaintext. Details: [relay/README.md](../relay/README.md).
+
+## Option B: Tailscale (VPN)
 
 [Tailscale](https://tailscale.com) puts your devices on a private WireGuard
 network with zero config — no port-forwarding, works behind NAT.

@@ -149,9 +149,13 @@
 
     // ---------- key from QR fragment or storage ----------
     function loadKey(){
-      const m = location.hash.match(/[#&]k=([A-Za-z0-9\-_]+)/);
+      const h = location.hash;
+      const m = h.match(/[#&]k=([A-Za-z0-9\-_]+)/);
       if (m) {
         localStorage.setItem("awaykit_key", m[1]);
+        // Remember which transport this QR came from: relay QRs carry &via=relay.
+        if (/[#&]via=relay\b/.test(h)) localStorage.setItem("awaykit_relay","1");
+        else localStorage.removeItem("awaykit_relay");
         history.replaceState(null, "", location.pathname + location.search); // strip key from address bar
         return b64urlDecode(m[1]);
       }
@@ -160,6 +164,16 @@
     }
     let key = loadKey();          // long-term pairing key (authenticates handshake)
     let sessionKey = null;        // per-connection ephemeral key (encrypts the channel)
+    // Relay mode: this page is served by a zero-knowledge relay; traffic flows as
+    // sealed blobs via /push + /pull. Room id = hash(K) — same derivation as the
+    // daemon; the relay can't recover K from it.
+    const viaRelay = localStorage.getItem("awaykit_relay") === "1";
+    function roomId(k){
+      const tag = enc.encode("awaykit-room-v1");
+      const buf = new Uint8Array(tag.length + k.length);
+      buf.set(tag,0); buf.set(k,tag.length);
+      return b64urlEncode(nacl.hash(buf).slice(0,16));
+    }
 
     // ---------- DOM ----------
     const pendingEl=document.getElementById("pending"), pendingEmpty=document.getElementById("pendingEmpty");
@@ -217,7 +231,11 @@
       const respond=async(choice)=>{
         const note=ta.value.trim();
         yes.disabled=no.disabled=ta.disabled=true;
-        try { await fetch("/respond",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({c:seal(sessionKey,{promptId:p.promptId,choice,note})})}); }
+        try {
+          const sealed = seal(sessionKey,{promptId:p.promptId,choice,note});
+          if (viaRelay) await relayPush(sealed);
+          else await fetch("/respond",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({c:sealed})});
+        }
         catch { yes.disabled=no.disabled=ta.disabled=false; return; }
         removeCard(p.promptId);
         if(choice==="approve") pushFeed("✅","Approved: "+(p.summary||p.tool),"approved");
@@ -268,13 +286,61 @@
       if (paused) return;
       if (!key) { showGate(); return; }
       setStatus(false, "pairing…");
+      if (viaRelay) return startRelay();
       let ok=false; try { ok = await pair(); } catch { ok=false; }
       if (!ok) { if (key && !paused) { setStatus(false,"reconnecting…"); clearTimeout(reconnectT); reconnectT=setTimeout(start,2000); } return; }
       showApp(); connect();
     }
 
+    // ---------- relay transport (remote, zero-knowledge) ----------
+    let pingT = null, preKeyBuf = [], edkWaiter = null;
+    function relayPush(blob){
+      return fetch("/push",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({room:roomId(key), to:"daemon", blob})});
+    }
+    function connectRelay(){
+      es = new EventSource(`/pull?room=${encodeURIComponent(roomId(key))}&as=phone`);
+      es.onerror = () => { setStatus(false); try{es.close();}catch{} if(paused) return; clearTimeout(reconnectT); reconnectT=setTimeout(start, 2500); };
+      es.addEventListener("m", (e) => {
+        if (!sessionKey) {
+          // Before the handshake completes: the daemon's ephemeral pubkey (under
+          // K) is what we're waiting for; buffer anything else briefly so a
+          // snapshot racing the handshake isn't lost.
+          const dk = openSealed(key, e.data);
+          if (dk && dk.dpk && edkWaiter) { edkWaiter(dk); return; }
+          preKeyBuf.push(e.data); if (preKeyBuf.length > 50) preKeyBuf.shift();
+          return;
+        }
+        const p = openSealed(sessionKey, e.data); if (p) dispatch(p);
+      });
+    }
+    async function startRelay(){
+      const eph = nacl.box.keyPair();   // fresh per session → forward secrecy, same as local
+      sessionKey = null; preKeyBuf = [];
+      connectRelay();
+      const dk = await new Promise((resolve) => {
+        edkWaiter = resolve;
+        setTimeout(() => resolve(null), 8000);
+        relayPush(seal(key, { p:"awaykit-session", t: Date.now(), epk: b64urlEncode(eph.publicKey) })).catch(() => resolve(null));
+      });
+      edkWaiter = null;
+      if (!dk) { // laptop offline (or key rotated) — keep waiting quietly
+        try{es&&es.close();}catch{}
+        if (!paused) { setStatus(false,"waiting for laptop…"); clearTimeout(reconnectT); reconnectT=setTimeout(start, 3000); }
+        return;
+      }
+      sessionKey = nacl.box.before(b64urlDecode(dk.dpk), eph.secretKey);
+      for (const b of preKeyBuf) { const p = openSealed(sessionKey, b); if (p) dispatch(p); }
+      preKeyBuf = [];
+      setStatus(true, "connected · relay");
+      showApp();
+      clearInterval(pingT);
+      // Liveness ping: lets the daemon expire remote sessions that walked away,
+      // so "connection is the switch" stays truthful over the relay too.
+      pingT = setInterval(() => { if (sessionKey && !paused) relayPush(seal(sessionKey,{t:"ping"})).catch(()=>{}); }, 25000);
+    }
+
     // ---------- connection controls (tap the status pill) ----------
-    function closeStream(){ clearTimeout(reconnectT); try{ es && es.close(); }catch{} es=null; }
+    function closeStream(){ clearTimeout(reconnectT); clearInterval(pingT); try{ es && es.close(); }catch{} es=null; }
     function openSheet(){
       btnDisconnect.style.display = paused ? "none" : "block";
       btnReconnect.innerHTML = paused ? "🔄&nbsp;&nbsp;Reconnect" : "🔄&nbsp;&nbsp;Reconnect now";
@@ -289,7 +355,7 @@
     btnDisconnect.onclick = () => { closeSheet(); paused=true; closeStream(); setStatus(false,"disconnected"); };
     btnUnpair.onclick = () => {
       if(!confirm("Unpair this device? You'll need to re-scan the QR from your laptop to reconnect.")) return;
-      closeStream(); paused=true; localStorage.removeItem("awaykit_key"); key=null; closeSheet();
+      closeStream(); paused=true; localStorage.removeItem("awaykit_key"); localStorage.removeItem("awaykit_relay"); key=null; closeSheet();
       showGate("Device unpaired", "Scan the QR code from your laptop's terminal to pair this device again.");
     };
 
