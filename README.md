@@ -1,5 +1,10 @@
 # awaykit
 
+[![CI](https://github.com/RaviChanduEdru/awaykit/actions/workflows/ci.yml/badge.svg)](https://github.com/RaviChanduEdru/awaykit/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Node ≥18](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)
+![Encrypted](https://img.shields.io/badge/channel-E2E%20encrypted-8a2be2)
+
 **Control your laptop's AI coding sessions from your phone — securely, self-hosted, end-to-end encrypted.**
 
 You kicked off a long agentic coding session (Claude Code, Codex, Cursor CLI…) and stepped out.
