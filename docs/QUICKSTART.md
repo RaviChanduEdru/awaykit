@@ -1,12 +1,14 @@
-# Quickstart — Milestone 0
+# Quickstart — v0.1 (paired + encrypted)
 
-Approve your Claude Code tool calls from your phone, over your own Wi-Fi.
-No accounts, no cloud, no npm install — just Node.
+Approve your Claude Code tool calls from your phone, over your own Wi-Fi —
+**end-to-end encrypted**, and only *your* paired phone can connect.
+Self-hosted, no accounts, no cloud.
 
-> **What this milestone is:** the smallest end-to-end loop that proves the idea.
-> LAN only, no encryption yet, phone client is a web page (not the native app yet).
-> Everything hardens outward from here — see [SECURITY.md](SECURITY.md) and the
-> [roadmap](../README.md#roadmap).
+> **What v0.1 is:** the LAN loop from Milestone 0, now with QR pairing and an
+> encrypted, authenticated channel (NaCl secretbox). It defends against passive
+> Wi-Fi snooping and unauthorized devices. It does **not** yet defend against an
+> active on-path attacker (the app is still served over plain HTTP) — see the
+> honest threat model in [SECURITY.md](SECURITY.md).
 
 ## Prerequisites
 
@@ -14,42 +16,58 @@ No accounts, no cloud, no npm install — just Node.
 - **Claude Code** installed
 - Your **phone on the same Wi-Fi** as the laptop
 
-## 1. Start the daemon
+## 1. Install & start the daemon
 
 ```bash
-cd daemon
-npm start        # or: node src/daemon.js
+npm install      # first time only — installs daemon deps (tweetnacl, qrcode)
+npm start        # starts the daemon and prints a pairing QR
 ```
 
-You'll see:
+You'll see a banner with a **QR code**:
 
 ```
-  awaykit daemon — Milestone 0
-  ───────────────────────────
+  awaykit daemon — v0.1 (paired + encrypted)
+  ─────────────────────────────────────────
   local:   http://127.0.0.1:4517
-  phone:   http://192.168.1.23:4517   ← open this on your phone (same Wi-Fi)
+  phone:   http://192.168.1.23:4517   (same Wi-Fi)
+
+  Scan to pair your phone (this QR contains your secret key):
+
+     █▀▀▀▀▀█ ▄▀ ▄ █▀▀▀▀▀█
+     █ ███ █ ▀█▄▀ █ ███ █      ← scan this with your phone camera
+     █ ▀▀▀ █ █ ▄  █ ▀▀▀ █
+     ▀▀▀▀▀▀▀ █▄▀▄ ▀▀▀▀▀▀▀
+     ...
+
+  Key stored at: ~/.awaykit/key   (re-pair anytime with:  npm start -- --pair)
 ```
 
-## 2. Open the phone client
+## 2. Pair your phone
 
-On your phone's browser, open the `phone:` URL printed above
-(e.g. `http://192.168.1.23:4517`). You should see the awaykit screen with a
-green **connected** dot.
+Point your phone camera (or any QR scanner) at the QR code and open the link.
+The awaykit screen loads and shows a green **connected** dot with a 🔒 — you're
+paired and the channel is encrypted. The key is stored on your phone; you won't
+need to scan again.
 
-> **The connection is the switch.** While a phone is connected, tool calls route
-> to it. While no phone is connected, awaykit stays out of the way and Claude
-> Code prompts you normally on the laptop. Open the page when you leave; close it
-> when you're back.
+> **Firewall (Windows):** if the page won't load, your firewall is blocking the
+> port. Double-click [`scripts/allow-lan-windows.bat`](../scripts/allow-lan-windows.bat)
+> and approve the UAC prompt (opens TCP 4517 to your local subnet only). Undo
+> with `scripts/deny-lan-windows.bat`.
+
+> **The connection is the switch.** While your paired phone is connected, tool
+> calls route to it. While it's not, awaykit stays out of the way and Claude Code
+> prompts you normally on the laptop. Open the page when you leave; close it when
+> you're back.
 
 ## 3. Wire the hook into Claude Code
 
-Add awaykit as a hook in your Claude Code settings. Use **user settings**
-(`~/.claude/settings.json`) to have it work across every project, or a project's
-`.claude/settings.json` for just that repo.
+Add awaykit as a hook in your Claude Code settings — **user settings**
+(`~/.claude/settings.json`) for every project, or a project's
+`.claude/settings.json` for one repo.
 
 Copy the block from [`examples/claude-code-settings.json`](../examples/claude-code-settings.json),
-adjusting the path to `hook.js` to wherever you cloned awaykit. On Windows, use
-forward slashes in the path (Node accepts them) to avoid JSON escaping pain:
+changing the `hook.js` path to wherever you cloned awaykit. On Windows, use
+forward slashes to avoid JSON escaping pain:
 
 ```jsonc
 {
@@ -81,23 +99,22 @@ forward slashes in the path (Node accepts them) to avoid JSON escaping pain:
 
 - **`timeout: 3600`** — a `PreToolUse` hook blocks while it waits for your tap.
   The default cap is 600s (10 min); bump it to an hour so you have time to answer
-  from your phone while you're out. If it ever times out, Claude Code falls back
-  to its normal prompt.
-- The **`Notification`** and **`Stop`** hooks are optional — they feed the
-  phone's *Activity* log ("agent needs input", "agent finished a turn").
+  from your phone while you're out. If it times out, Claude Code falls back to its
+  normal prompt.
+- **`Notification`** and **`Stop`** are optional — they feed the phone's
+  *Activity* log ("agent needs input", "agent finished a turn").
 
-Restart Claude Code (or run `/hooks` to confirm they're registered).
+Restart Claude Code (or run `/hooks`) so it picks up the new hooks.
 
 ## 4. Try it
 
-1. Keep the daemon running and the phone page open.
-2. In Claude Code, ask it to do something that runs a command or edits a file —
-   e.g. *"run `npm install express`"*.
-3. Your phone buzzes and shows an **approval card**: the tool and the exact
-   command. Tap **Approve** → Claude Code unblocks and proceeds. Tap **Deny** →
-   the tool call is refused and Claude sees why.
+1. Keep the daemon running and the phone paired/connected.
+2. In Claude Code, ask it to run a command or edit a file — e.g. *"run `npm install express`"*.
+3. Your phone buzzes and shows an **approval card** (decrypted on-device): the
+   tool and the exact command. Tap **Approve** → Claude Code unblocks. Tap
+   **Deny** → the tool call is refused and Claude sees why.
 
-That's the whole loop: laptop agent → phone → your decision → laptop agent.
+That's the loop: laptop agent → encrypted channel → your phone → your decision → laptop agent.
 
 ## Configuration
 
@@ -106,24 +123,31 @@ That's the whole loop: laptop agent → phone → your decision → laptop agent
 | `AWAYKIT_PORT` | `4517` | Port the daemon listens on |
 | `AWAYKIT_HOST` | `0.0.0.0` | Bind address (all interfaces so the phone can reach it) |
 | `AWAYKIT_URL`  | `http://127.0.0.1:4517` | Where the **hook** finds the daemon |
+| `AWAYKIT_HOME` | `~/.awaykit` | Where the pairing key is stored |
+
+Re-pair all devices (rotate the key): `npm start -- --pair`.
 
 ## Troubleshooting
 
-- **Phone can't load the page** — you're on a different network, or the laptop
-  firewall is blocking the port. On Windows, allow Node through the firewall for
-  private networks, or run:
-  `New-NetFirewallRule -DisplayName "awaykit" -Direction Inbound -LocalPort 4517 -Protocol TCP -Action Allow`
+- **Phone can't load the page** — different network, or the firewall is blocking
+  the port. On Windows run `scripts/allow-lan-windows.bat` (see above).
+- **"Pairing expired / key changed"** — you rotated the key (`--pair`) or moved
+  the key file. Re-scan the QR from the terminal.
 - **Nothing shows on the phone when the agent runs a command** — check the daemon
   terminal for a `→ phone:` line. No line means the hook didn't fire: confirm the
-  `command` path in settings.json is correct and run `/hooks` in Claude Code.
+  `command` path in settings.json and run `/hooks`.
 - **Every tool asks, even reads** — your `matcher` is too broad. Keep it to
   `Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch`.
-- **It asks even when I'm at the laptop** — close the phone page. With no phone
-  connected the daemon returns instantly and Claude Code prompts locally.
+- **It asks even when I'm at the laptop** — close the phone page. With no paired
+  phone connected, Claude Code prompts locally as normal.
 
 ## Security reality check ⚠️
 
-Milestone 0 is a **LAN-only, unencrypted, unauthenticated** demo. Anyone on your
-Wi-Fi who opens the URL can approve/deny your tool calls. Do **not** use it on
-untrusted networks. Pairing, end-to-end encryption, and auth are the very next
-milestones — see [SECURITY.md](SECURITY.md).
+v0.1 **encrypts and authenticates** the phone⇄laptop channel (NaCl secretbox;
+only a device with your paired key can connect, read events, or approve). That
+defeats passive Wi-Fi snooping and random devices on your network.
+
+It does **not** yet defend against an **active** on-path attacker, because the app
+shell is still served over plain HTTP — so stick to networks you trust for now.
+HTTPS/pinning and a native app are the next milestones. Full threat model:
+[SECURITY.md](SECURITY.md).

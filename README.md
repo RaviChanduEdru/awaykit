@@ -56,35 +56,37 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the threat model.
 - **`relay/`** — optional, self-hostable; forwards ciphertext + wakes your phone
   with push notifications. Never sees plaintext.
 
-## Try it now (Milestone 0)
+## Try it now (v0.1 — paired & encrypted)
 
-The first working loop is here: **approve your Claude Code tool calls from your
-phone**, over your own Wi-Fi, with zero dependencies (just Node).
+**Approve your Claude Code tool calls from your phone**, over your own Wi-Fi, on
+an end-to-end encrypted channel that only *your* paired phone can use.
 
 ```bash
-cd daemon && npm start          # prints a phone: URL
+npm install && npm start        # prints a pairing QR
 ```
 
-Open that URL on your phone, wire up the hook, and every `Bash`/`Write`/`Edit`
-the agent tries pops up as a tap-to-approve card. Full walkthrough:
-**[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
+Scan the QR with your phone, wire up the hook, and every `Bash`/`Write`/`Edit`
+the agent tries pops up as a tap-to-approve card — decrypted on your device.
+Full walkthrough: **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
 
-> ⚠️ Milestone 0 is LAN-only and **not encrypted or authenticated yet** — a demo
-> of the loop, not a secure product. Encryption & pairing are the next milestones.
+> 🔒 v0.1 encrypts + authenticates the phone⇄laptop channel (NaCl secretbox);
+> only a device with your paired key can connect, read events, or approve. It does
+> **not** yet stop an *active* on-path attacker (the app shell is served over plain
+> HTTP) — trusted networks for now. Honest threat model: [SECURITY.md](docs/SECURITY.md).
 
 ## Status
 
 🚧 **Early development.**
-- ✅ **Milestone 0** — Claude Code hook → laptop daemon → phone approval card →
-  approve/deny unblocks the agent. Works over LAN today.
-- ⏭️ Next: QR pairing + end-to-end encryption, then push notifications.
+- ✅ **Milestone 0** — hook → daemon → phone approval card → approve/deny unblocks the agent (LAN).
+- ✅ **v0.1** — QR pairing + end-to-end encrypted, authenticated channel (only your paired phone connects).
+- ⏭️ Next: push notifications via optional relay; forward secrecy (X25519 per-session keys) + integrity vs active MITM.
 
 Star/watch the repo to follow along.
 
 ## Roadmap
 
 - [x] Milestone 0 — end-to-end approve/deny loop over LAN (hook + daemon + web client)
-- [ ] v0.1 — QR pairing + X25519 key exchange; end-to-end encrypted channel
+- [x] v0.1 — QR pairing + encrypted, authenticated channel (NaCl secretbox)
 - [ ] v0.2 — push notifications via optional relay (ciphertext only)
 - [ ] v0.3 — agent-agnostic adapters (Codex, Cursor CLI, OpenCode)
 - [ ] v0.4 — multi-session dashboard, session history

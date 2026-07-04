@@ -1,0 +1,125 @@
+/**
+ * awaykit v0.1 end-to-end test — no external test runner.
+ *
+ * Spawns the daemon with a throwaway key dir, then drives the full encrypted
+ * flow the way a paired phone would: prove-key handshake → session cookie →
+ * sealed SSE stream → fire a hook → decrypt the prompt → sealed approve →
+ * assert the hook receives the decision. Also checks the negative paths
+ * (no auth, bad key). Exits non-zero on any failure.
+ */
+import { spawn } from "node:child_process";
+import http from "node:http";
+import { readFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import nacl from "tweetnacl";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DAEMON = join(__dirname, "..", "src", "daemon.js");
+const HOME = mkdtempSync(join(tmpdir(), "awaykit-test-"));
+const PORT = 4599;
+const BASE = `http://127.0.0.1:${PORT}`;
+
+// crypto — must match daemon/src/crypto.js and public/index.html
+const b64e = (b) => Buffer.from(b).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const b64d = (s) => new Uint8Array(Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64"));
+const seal = (key, obj) => {
+  const n = nacl.randomBytes(24);
+  const box = nacl.secretbox(new TextEncoder().encode(JSON.stringify(obj)), n, key);
+  const o = new Uint8Array(24 + box.length); o.set(n); o.set(box, 24); return b64e(o);
+};
+const openS = (key, s) => {
+  const d = b64d(s); const m = nacl.secretbox.open(d.slice(24), d.slice(0, 24), key);
+  return m ? JSON.parse(new TextDecoder().decode(m)) : null;
+};
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let passed = 0;
+function ok(cond, label) { if (!cond) throw new Error("FAIL: " + label); passed++; console.log("  ✓ " + label); }
+async function until(fn, ms) { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await sleep(25); } return false; }
+
+function req(method, path, { headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const data = body != null ? JSON.stringify(body) : null;
+    const h = { ...(data ? { "content-type": "application/json", "content-length": Buffer.byteLength(data) } : {}), ...headers };
+    const r = http.request(BASE + path, { method, headers: h }, (res) => {
+      let buf = ""; res.on("data", (c) => (buf += c)); res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: buf }));
+    });
+    r.on("error", reject); if (data) r.write(data); r.end();
+  });
+}
+function sseConnect(cookie, onMsg) {
+  return new Promise((resolve, reject) => {
+    const r = http.request(BASE + "/events", { headers: { cookie } }, (res) => {
+      if (res.statusCode !== 200) { reject(new Error("events status " + res.statusCode)); return; }
+      let buf = "";
+      res.on("data", (c) => {
+        buf += c; let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const block = buf.slice(0, i); buf = buf.slice(i + 2);
+          if (block.startsWith("event: m")) {
+            const line = block.split("\n").find((l) => l.startsWith("data: "));
+            if (line) onMsg(line.slice(6));
+          }
+        }
+      });
+      resolve({ close: () => r.destroy() });
+    });
+    r.on("error", reject); r.end();
+  });
+}
+
+const child = spawn(process.execPath, [DAEMON], {
+  env: { ...process.env, AWAYKIT_HOME: HOME, AWAYKIT_PORT: String(PORT), AWAYKIT_HOST: "127.0.0.1" },
+  stdio: "ignore",
+});
+function done(code) { try { child.kill(); } catch {} process.exit(code); }
+child.on("exit", (c) => { if (c) { console.error("daemon exited early: " + c); process.exit(1); } });
+
+try {
+  // wait for daemon
+  const up = await until(async () => { try { return (await req("GET", "/health")).status === 200; } catch { return false; } }, 5000);
+  ok(up, "daemon boots and /health responds");
+
+  const key = b64d(readFileSync(join(HOME, "key"), "utf8").trim());
+  ok(key.length === 32, "pairing key persisted (32 bytes)");
+
+  ok((await req("GET", "/events")).status === 401, "/events without a session is rejected (401)");
+  ok((await req("POST", "/respond", { body: { c: seal(key, { promptId: "x", choice: "approve" }) } })).status === 401, "/respond without a session is rejected (401)");
+
+  const badKey = nacl.randomBytes(32);
+  ok((await req("POST", "/session", { body: { proof: seal(badKey, { p: "awaykit-session", t: Date.now() }) } })).status === 401, "wrong key => pairing proof rejected (401)");
+
+  const sess = await req("POST", "/session", { body: { proof: seal(key, { p: "awaykit-session", t: Date.now() }) } });
+  ok(sess.status === 200 && sess.headers["set-cookie"], "correct key => session cookie issued");
+  const cookie = sess.headers["set-cookie"][0].split(";")[0];
+
+  const got = [];
+  const stream = await sseConnect(cookie, (data) => { const p = openS(key, data); if (p) got.push(p); });
+  ok(await until(() => got.some((p) => p.type === "snapshot"), 1000), "SSE opens and sends an encrypted snapshot");
+  ok(await until(async () => (await req("GET", "/health")).body.includes('"clients":1'), 1000), "daemon counts the paired client");
+
+  const hookP = req("POST", "/hook", { body: { kind: "permission", tool: "Bash", summary: "Run: npm test", detail: "npm test", sessionId: "sess1" } });
+  ok(await until(() => got.some((p) => p.type === "prompt"), 2000), "hook prompt is delivered over the encrypted stream");
+  const prompt = got.find((p) => p.type === "prompt");
+  ok(prompt.summary === "Run: npm test", "decrypted prompt content matches what the hook sent");
+
+  const resp = await req("POST", "/respond", { headers: { cookie }, body: { c: seal(key, { promptId: prompt.promptId, choice: "approve" }) } });
+  ok(resp.status === 200, "sealed approve accepted");
+  const hookRes = JSON.parse((await hookP).body);
+  ok(hookRes.choice === "approve", "hook (the agent) receives the approve decision");
+  ok(await until(() => got.some((p) => p.type === "resolved" && p.promptId === prompt.promptId), 1000), "resolved event broadcast to the stream");
+
+  // tamper check: flipping a ciphertext byte must not decrypt
+  const sealed = seal(key, { hi: 1 });
+  const tampered = sealed.slice(0, -2) + (sealed.slice(-2) === "AA" ? "AB" : "AA");
+  ok(openS(key, tampered) === null, "tampered ciphertext fails to open (auth tag holds)");
+
+  stream.close();
+  console.log(`\nALL ${passed} CHECKS PASSED ✅`);
+  done(0);
+} catch (e) {
+  console.error("\n" + (e && e.message || e));
+  done(1);
+}

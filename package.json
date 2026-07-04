@@ -4,6 +4,7 @@
   "workspaces": ["daemon"],
   "scripts": {
     "start": "npm start -w daemon",
-    "daemon": "node daemon/src/daemon.js"
+    "daemon": "node daemon/src/daemon.js",
+    "test": "npm test -w daemon"
   }
 }
