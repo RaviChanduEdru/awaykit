@@ -15,6 +15,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import nacl from "tweetnacl";
 import { pickPairingHost, candidateHosts } from "../src/net.js";
+import { describe } from "../src/describe.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DAEMON = join(__dirname, "..", "src", "daemon.js");
@@ -91,6 +92,14 @@ try {
   ok(pickPairingHost(fakeIfaces, "away.example.com").ip === "away.example.com", "AWAYKIT_PUBLIC_HOST overrides everything");
   ok(pickPairingHost({}).ip === "127.0.0.1", "empty interfaces -> loopback");
   ok(candidateHosts(fakeIfaces).filter((c) => c.kind === "vpn").length === 1, "candidateHosts classifies the VPN interface");
+
+  // rich approval cards (describe) — pure
+  const wCard = describe("Write", { file_path: "/a/b.js", content: "line1\nline2\nline3" });
+  ok(wCard.summary.includes("3 lines") && wCard.detail.includes("line2"), "Write card shows line count + the file contents");
+  const eCard = describe("Edit", { file_path: "/a/b.js", old_string: "foo", new_string: "bar" });
+  ok(eCard.detail.includes("- foo") && eCard.detail.includes("+ bar"), "Edit card shows a -/+ diff");
+  ok(describe("Bash", { command: "npm test" }).detail === "npm test", "Bash card shows the exact command");
+  ok(describe("Write", { file_path: "x", content: "z".repeat(5000) }).detail.includes("more chars"), "oversized content is clipped");
 
   // wait for daemon
   const up = await until(async () => { try { return (await req("GET", "/health")).status === 200; } catch { return false; } }, 5000);

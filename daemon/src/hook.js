@@ -12,6 +12,8 @@
  * agent is never broken by awaykit being down.
  */
 
+import { describe } from "./describe.js";
+
 const DAEMON = process.env.AWAYKIT_URL || "http://127.0.0.1:4517";
 
 function readStdin() {
@@ -23,30 +25,6 @@ function readStdin() {
     // If nothing is piped (e.g. run by hand), don't hang forever.
     setTimeout(() => resolve(data), 500).unref?.();
   });
-}
-
-/** Turn a tool call into a short, human summary + detail for the phone card. */
-function describe(toolName, input) {
-  input = input || {};
-  switch (toolName) {
-    case "Bash":
-      return { summary: input.command ? `Run: ${input.command}` : "Run a shell command", detail: input.command || "" };
-    case "Write":
-      return { summary: `Write ${input.file_path || "a file"}`, detail: input.file_path || "" };
-    case "Edit":
-    case "MultiEdit":
-      return { summary: `Edit ${input.file_path || "a file"}`, detail: input.file_path || "" };
-    case "Read":
-      return { summary: `Read ${input.file_path || "a file"}`, detail: input.file_path || "" };
-    case "WebFetch":
-      return { summary: `Fetch ${input.url || "a URL"}`, detail: input.url || "" };
-    default: {
-      let detail = "";
-      try { detail = JSON.stringify(input, null, 2); } catch {}
-      if (detail.length > 2000) detail = detail.slice(0, 2000) + "\n…(truncated)";
-      return { summary: `${toolName}`, detail };
-    }
-  }
 }
 
 async function postDaemon(payload) {
