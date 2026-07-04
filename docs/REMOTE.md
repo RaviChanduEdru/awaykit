@@ -15,9 +15,28 @@ actually out (different Wi-Fi, mobile data), pick one of two paths:
 
 ## Option A: zero-knowledge relay (no VPN)
 
-Host [`relay/server.js`](../relay/README.md) anywhere — a $3 VPS, a free-tier
-container, a Raspberry Pi. Zero dependencies. **Put it behind HTTPS** (that also
-protects the app shell it serves to your phone).
+Host [`relay/server.js`](../relay/README.md) anywhere that runs Node — a free
+Render/Fly instance, a $3 VPS, a Raspberry Pi. Zero dependencies. **Put it
+behind HTTPS** (that also protects the app shell it serves to your phone).
+
+> ⚠️ Static hosts (GitHub Pages, Netlify static, S3) will **not** work — the
+> relay is a running server, not a set of files.
+
+**Fastest: one-click on Render (free).** This repo ships a `render.yaml`
+blueprint: fork/own the repo → [dashboard.render.com](https://dashboard.render.com)
+→ *New → Blueprint* → pick your repo → deploy. You get
+`https://awaykit-relay-….onrender.com` with TLS included. (Free instances sleep
+when idle; the first connection after a break takes ~30–60 s to wake.)
+
+**No account at all (testing):** run the relay on your own laptop behind a
+[Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/):
+
+```powershell
+npm run relay
+cloudflared tunnel --url http://localhost:4600   # prints a https://…trycloudflare.com URL
+```
+
+The URL changes on every run — fine for trying it, not for daily use.
 
 ```bash
 # on the relay host

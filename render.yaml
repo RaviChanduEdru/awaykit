@@ -1,0 +1,10 @@
+# One-click deploy of the awaykit zero-knowledge relay on Render's free tier.
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: awaykit-relay
+    runtime: node
+    plan: free
+    buildCommand: "echo zero dependencies - nothing to build"
+    startCommand: node relay/server.js
+    healthCheckPath: /health

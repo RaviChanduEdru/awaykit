@@ -61,11 +61,11 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the threat model.
 - **`relay/`** — optional, self-hostable; forwards ciphertext + wakes your phone
   with push notifications. Never sees plaintext.
 
-## Try it now (v0.4 — paired · encrypted · chat steering · works anywhere)
+## Try it now (v0.5 — paired · encrypted · steering · works anywhere)
 
 **Approve — and steer — your Claude Code sessions from your phone** on an
 end-to-end encrypted channel that only *your* paired phone can use — on your
-Wi-Fi, or from any network over a VPN.
+Wi-Fi, over a VPN, or from **anywhere via the zero-knowledge relay**.
 
 ```bash
 npm install && npm start        # prints a pairing QR
@@ -77,8 +77,13 @@ It's a conversation, not just a gate: **Deny with a typed note** and Claude
 reads it as feedback ("don't run that — do X instead"); when the agent finishes
 a turn, a **"what next?"** card lets you send the next instruction so it keeps
 going while you're out.
-Full walkthrough: **[docs/QUICKSTART.md](docs/QUICKSTART.md)**. Away from home?
-Put both devices on a VPN and it works from anywhere — **[docs/REMOTE.md](docs/REMOTE.md)**.
+Full walkthrough: **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
+
+Away from home? Two paths — a VPN, or the **zero-knowledge relay** (no VPN, no
+open ports; it forwards sealed blobs it cannot read): **[docs/REMOTE.md](docs/REMOTE.md)**.
+Deploy the relay free in one click:
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/RaviChanduEdru/awaykit)
 
 > 🔒 The channel is encrypted + authenticated (NaCl secretbox) with **per-session
 > forward secrecy** (X25519 ephemeral keys) — only your paired phone can connect,
