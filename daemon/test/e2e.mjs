@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import nacl from "tweetnacl";
+import { pickPairingHost, candidateHosts } from "../src/net.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DAEMON = join(__dirname, "..", "src", "daemon.js");
@@ -78,6 +79,19 @@ function done(code) { try { child.kill(); } catch {} process.exit(code); }
 child.on("exit", (c) => { if (c) { console.error("daemon exited early: " + c); process.exit(1); } });
 
 try {
+  // address selection (pure, no daemon needed)
+  const fakeIfaces = {
+    "Wi-Fi": [{ family: "IPv4", internal: false, address: "192.168.1.5" }],
+    "tailscale0": [{ family: "IPv4", internal: false, address: "100.101.102.103" }],
+    "lo": [{ family: "IPv4", internal: true, address: "127.0.0.1" }],
+  };
+  ok(pickPairingHost(fakeIfaces).ip === "100.101.102.103" && pickPairingHost(fakeIfaces).kind === "vpn", "pairing prefers the VPN (Tailscale) address over LAN");
+  ok(pickPairingHost({ "eth0": [{ family: "IPv4", internal: false, address: "100.64.0.9" }] }).kind === "vpn", "CGNAT 100.64/10 detected as VPN even without a VPN iface name");
+  ok(pickPairingHost({ "Wi-Fi": [{ family: "IPv4", internal: false, address: "192.168.1.5" }] }).ip === "192.168.1.5", "falls back to LAN when no VPN present");
+  ok(pickPairingHost(fakeIfaces, "away.example.com").ip === "away.example.com", "AWAYKIT_PUBLIC_HOST overrides everything");
+  ok(pickPairingHost({}).ip === "127.0.0.1", "empty interfaces -> loopback");
+  ok(candidateHosts(fakeIfaces).filter((c) => c.kind === "vpn").length === 1, "candidateHosts classifies the VPN interface");
+
   // wait for daemon
   const up = await until(async () => { try { return (await req("GET", "/health")).status === 200; } catch { return false; } }, 5000);
   ok(up, "daemon boots and /health responds");

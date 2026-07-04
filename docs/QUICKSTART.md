@@ -1,14 +1,14 @@
-# Quickstart — v0.1 (paired + encrypted)
+# Quickstart — v0.3 (paired · encrypted · forward-secret · remote-ready)
 
-Approve your Claude Code tool calls from your phone, over your own Wi-Fi —
-**end-to-end encrypted**, and only *your* paired phone can connect.
-Self-hosted, no accounts, no cloud.
+Approve your Claude Code tool calls from your phone —
+**end-to-end encrypted**, only *your* paired phone can connect, and (over a VPN)
+from any network. Self-hosted, no accounts, no cloud.
 
-> **What v0.1 is:** the LAN loop from Milestone 0, now with QR pairing and an
-> encrypted, authenticated channel (NaCl secretbox). It defends against passive
-> Wi-Fi snooping and unauthorized devices. It does **not** yet defend against an
-> active on-path attacker (the app is still served over plain HTTP) — see the
-> honest threat model in [SECURITY.md](SECURITY.md).
+> **What this is:** the loop from Milestone 0, now with QR pairing, an encrypted +
+> authenticated channel with **forward secrecy** (per-session X25519 keys), and
+> optional **remote access** over a VPN. On plain-HTTP LAN it still doesn't stop
+> an *active* on-path attacker — a VPN ([REMOTE.md](REMOTE.md)) covers that. Full
+> threat model: [SECURITY.md](SECURITY.md).
 
 ## Prerequisites
 
@@ -58,6 +58,10 @@ need to scan again.
 > calls route to it. While it's not, awaykit stays out of the way and Claude Code
 > prompts you normally on the laptop. Open the page when you leave; close it when
 > you're back.
+
+> **Use it from anywhere.** To approve commands off your home Wi-Fi, put both
+> devices on a VPN (Tailscale is easiest) — awaykit auto-detects the VPN address
+> for the QR. See **[REMOTE.md](REMOTE.md)**.
 
 ## 3. Wire the hook into Claude Code
 
@@ -124,6 +128,7 @@ That's the loop: laptop agent → encrypted channel → your phone → your deci
 | `AWAYKIT_HOST` | `0.0.0.0` | Bind address (all interfaces so the phone can reach it) |
 | `AWAYKIT_URL`  | `http://127.0.0.1:4517` | Where the **hook** finds the daemon |
 | `AWAYKIT_HOME` | `~/.awaykit` | Where the pairing key is stored |
+| `AWAYKIT_PUBLIC_HOST` | _(auto-detect)_ | Host/IP to encode in the pairing QR — set to your VPN address for remote access ([REMOTE.md](REMOTE.md)) |
 
 Re-pair all devices (rotate the key): `npm start -- --pair`.
 

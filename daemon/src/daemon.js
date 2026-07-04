@@ -1,5 +1,5 @@
 /**
- * awaykit daemon — v0.2 (paired + encrypted + per-session forward secrecy).
+ * awaykit daemon — v0.3 (paired + encrypted + forward secrecy + remote-ready).
  *
  *   Claude Code PreToolUse hook ──POST /hook (loopback only)──▶ daemon
  *                                                                 │ holds agent blocked
@@ -34,12 +34,14 @@ import { networkInterfaces } from "node:os";
 import { randomUUID, randomBytes } from "node:crypto";
 import QRCode from "qrcode";
 import { loadOrCreateKey, regenerateKey, keyPath, seal, open, openProof, newEphemeralKeyPair, deriveSessionKey, b64urlEncode } from "./crypto.js";
+import { pickPairingHost, candidateHosts } from "./net.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "public");
 const PORT = Number(process.env.AWAYKIT_PORT || 4517);
 const HOST = process.env.AWAYKIT_HOST || "0.0.0.0";
 const REPAIR = process.argv.includes("--pair") || process.env.AWAYKIT_REPAIR === "1";
+const PUBLIC_HOST = process.env.AWAYKIT_PUBLIC_HOST || "";
 
 const KEY = REPAIR ? regenerateKey() : loadOrCreateKey();
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -252,31 +254,29 @@ const server = createServer(async (req, res) => {
   }
 });
 
-function lanIPs() {
-  const out = [];
-  const ifaces = networkInterfaces();
-  for (const name of Object.keys(ifaces)) {
-    for (const net of ifaces[name] || []) {
-      if (net.family === "IPv4" && !net.internal) out.push(net.address);
-    }
-  }
-  return out;
-}
-
 async function printPairing() {
-  const ips = lanIPs();
-  const ip = ips[0] || "127.0.0.1";
-  const pairURL = `http://${ip}:${PORT}/#k=${b64urlEncode(KEY)}`;
+  const ifaces = networkInterfaces();
+  const host = pickPairingHost(ifaces, PUBLIC_HOST);
+  const pairURL = `http://${host.ip}:${PORT}/#k=${b64urlEncode(KEY)}`;
 
-  console.log(`\n  awaykit daemon — v0.2 (paired · encrypted · forward-secret)`);
+  console.log(`\n  awaykit daemon — v0.3 (paired · encrypted · forward-secret)`);
   console.log(`  ──────────────────────────────────────────────────────────`);
   console.log(`  local:   http://127.0.0.1:${PORT}`);
-  if (ips.length) console.log(`  phone:   http://${ip}:${PORT}   (same Wi-Fi)`);
-  console.log(`\n  Scan to pair your phone (this QR contains your secret key):\n`);
+  for (const c of candidateHosts(ifaces)) {
+    const label = c.kind === "vpn" ? "remote" : "phone ";
+    const reach = c.kind === "vpn" ? "any network via VPN" : "same Wi-Fi only";
+    console.log(`  ${label}:  http://${c.ip}:${PORT}   (${reach} — ${c.iface})`);
+  }
+
+  const note = host.kind === "public" ? "AWAYKIT_PUBLIC_HOST"
+    : host.kind === "vpn" ? "VPN — reachable from anywhere"
+    : "LAN only — for remote access see docs/REMOTE.md";
+  console.log(`\n  Pairing host: ${host.ip}  (${note})`);
+  console.log(`  Scan to pair your phone (this QR contains your secret key):\n`);
   try {
     console.log(await QRCode.toString(pairURL, { type: "terminal", small: true }));
   } catch {
-    console.log(`  (QR render failed — open this URL on your phone instead)`);
+    console.log(`  (QR render failed — open the URL below on your phone instead)`);
   }
   console.log(`  If the QR won't scan, open this exact URL on your phone:`);
   console.log(`  ${pairURL}\n`);

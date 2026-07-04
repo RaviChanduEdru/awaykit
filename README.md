@@ -56,10 +56,11 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the threat model.
 - **`relay/`** — optional, self-hostable; forwards ciphertext + wakes your phone
   with push notifications. Never sees plaintext.
 
-## Try it now (v0.2 — paired, encrypted, forward-secret)
+## Try it now (v0.3 — paired · encrypted · forward-secret · works anywhere)
 
-**Approve your Claude Code tool calls from your phone**, over your own Wi-Fi, on
-an end-to-end encrypted channel that only *your* paired phone can use.
+**Approve your Claude Code tool calls from your phone** on an end-to-end
+encrypted channel that only *your* paired phone can use — on your Wi-Fi, or from
+any network over a VPN.
 
 ```bash
 npm install && npm start        # prints a pairing QR
@@ -67,13 +68,14 @@ npm install && npm start        # prints a pairing QR
 
 Scan the QR with your phone, wire up the hook, and every `Bash`/`Write`/`Edit`
 the agent tries pops up as a tap-to-approve card — decrypted on your device.
-Full walkthrough: **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
+Full walkthrough: **[docs/QUICKSTART.md](docs/QUICKSTART.md)**. Away from home?
+Put both devices on a VPN and it works from anywhere — **[docs/REMOTE.md](docs/REMOTE.md)**.
 
-> 🔒 The phone⇄laptop channel is encrypted + authenticated (NaCl secretbox) with
-> **per-session forward secrecy** (X25519 ephemeral keys) — only your paired phone
-> can connect, and leaking the long-term key can't decrypt past sessions. It does
-> **not** yet stop an *active* on-path attacker (the app shell is served over plain
-> HTTP) — trusted networks for now. Honest threat model: [SECURITY.md](docs/SECURITY.md).
+> 🔒 The channel is encrypted + authenticated (NaCl secretbox) with **per-session
+> forward secrecy** (X25519 ephemeral keys) — only your paired phone can connect,
+> and leaking the long-term key can't decrypt past sessions. On plain-HTTP LAN it
+> doesn't stop an *active* on-path attacker; running over a VPN (Tailscale/
+> WireGuard) closes that gap. Honest threat model: [SECURITY.md](docs/SECURITY.md).
 
 ## Status
 
@@ -81,7 +83,8 @@ Full walkthrough: **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
 - ✅ **Milestone 0** — hook → daemon → phone approval card → approve/deny unblocks the agent (LAN).
 - ✅ **v0.1** — QR pairing + end-to-end encrypted, authenticated channel (only your paired phone connects).
 - ✅ **v0.2** — forward secrecy: per-session X25519 ephemeral keys, so leaking the long-term key can't decrypt past sessions.
-- ⏭️ Next: remote access (work from any network); push notifications; integrity vs active MITM.
+- ✅ **v0.3** — remote access: use it from any network over a VPN; auto-detects the VPN address for pairing.
+- ⏭️ Next: zero-knowledge relay (remote without a VPN); push notifications; integrity vs active MITM.
 
 Star/watch the repo to follow along.
 
@@ -90,9 +93,10 @@ Star/watch the repo to follow along.
 - [x] Milestone 0 — end-to-end approve/deny loop over LAN (hook + daemon + web client)
 - [x] v0.1 — QR pairing + encrypted, authenticated channel (NaCl secretbox)
 - [x] v0.2 — forward secrecy (per-session X25519 ephemeral keys)
-- [ ] v0.3 — remote access: zero-knowledge relay (ciphertext only) or VPN
-- [ ] v0.4 — push notifications; integrity vs active MITM (HTTPS / native app)
-- [ ] v0.5 — agent-agnostic adapters (Codex, Cursor CLI, OpenCode)
+- [x] v0.3 — remote access from any network over a VPN (Tailscale/WireGuard)
+- [ ] v0.4 — zero-knowledge relay (remote without a VPN, ciphertext only)
+- [ ] v0.5 — push notifications; integrity vs active MITM (HTTPS / native app)
+- [ ] v0.6 — agent-agnostic adapters (Codex, Cursor CLI, OpenCode)
 - [ ] v1.0 — audited security model, reproducible builds
 
 ## Contributing
