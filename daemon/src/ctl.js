@@ -16,16 +16,19 @@
  *   npm start -- --pair       (re-pair: mint a new key + QR)
  */
 import process from "node:process";
+import { daemonEndpoint, daemonRequest } from "./endpoint.js";
 
 const PORT = Number(process.env.AWAYKIT_PORT || 4517);
-const BASE = `http://127.0.0.1:${PORT}`;
+// The running daemon advertises its scheme (http, or https under AWAYKIT_TLS);
+// fall back to plain HTTP on the default port when nothing's advertised.
+const { base: BASE, tls: TLS } = daemonEndpoint(PORT);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** GET /health, or null if nothing answers on the port. */
 async function health() {
   try {
-    const r = await fetch(`${BASE}/health`, { signal: AbortSignal.timeout(1200) });
-    return r.ok ? await r.json() : null;
+    const r = await daemonRequest(BASE, "/health", { timeoutMs: 1200, tls: TLS });
+    return r.status === 200 ? JSON.parse(r.body) : null;
   } catch { return null; }
 }
 
@@ -52,7 +55,7 @@ async function cmdStatus() {
 async function cmdStop({ quiet = false } = {}) {
   const h = await health();
   if (!h) { if (!quiet) console.log(`  ○ awaykit wasn't running.`); return true; }
-  try { await fetch(`${BASE}/shutdown`, { method: "POST", signal: AbortSignal.timeout(1200) }); }
+  try { await daemonRequest(BASE, "/shutdown", { method: "POST", timeoutMs: 1200, tls: TLS }); }
   catch { /* the daemon may drop the socket as it exits — that's fine */ }
   for (let i = 0; i < 50; i++) {
     if (!(await health())) { if (!quiet) console.log(`  ✓ awaykit stopped.`); return true; }

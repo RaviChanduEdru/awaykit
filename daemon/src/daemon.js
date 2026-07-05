@@ -1,5 +1,5 @@
 /**
- * awaykit daemon — v0.4 (paired + encrypted + forward secrecy + chat steering).
+ * awaykit daemon — v0.7 (paired + encrypted + forward secrecy + steering + push + optional LAN TLS).
  *
  *   Claude Code PreToolUse hook ──POST /hook (loopback only)──▶ daemon
  *                                                                 │ holds agent blocked
@@ -43,6 +43,9 @@ import { pickPairingHost, candidateHosts } from "./net.js";
 import { appendAudit, readAudit } from "./audit.js";
 import { startRelayClient } from "./relay-client.js";
 import { initPush, vapidPublicKey, subCount, addSub, removeSub, sendPush } from "./push.js";
+import { createServer as createHttpsServer } from "node:https";
+import { loadOrCreateCert, certPaths } from "./tls.js";
+import { writeEndpoint } from "./endpoint.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "public");
@@ -61,6 +64,11 @@ const PUBLIC_HOST = process.env.AWAYKIT_PUBLIC_HOST || "";
  *  daemon holds an outbound link to it — remote access with no VPN and no
  *  inbound ports; the relay sees only ciphertext. See relay/README.md. */
 const RELAY = (process.env.AWAYKIT_RELAY || "").replace(/\/+$/, "");
+/** Optional self-signed HTTPS on the LAN (v0.7): app-shell + channel integrity
+ *  against an active on-path attacker. See tls.js / docs/SECURITY.md. */
+const TLS = process.argv.includes("--tls") || process.env.AWAYKIT_TLS === "1";
+const SCHEME = TLS ? "https" : "http";
+let CERT = null; // { key, cert, fingerprint } once loaded, when TLS is on
 
 const KEY = REPAIR ? regenerateKey() : loadOrCreateKey();
 const PUSH = initPush(); // VAPID keys + persisted push subscriptions (~/.awaykit)
@@ -150,7 +158,7 @@ function publicPrompt(p) {
 
 // ---- request routing -------------------------------------------------------
 
-const server = createServer(async (req, res) => {
+const requestHandler = async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const { pathname } = url;
 
@@ -352,22 +360,22 @@ const server = createServer(async (req, res) => {
   } catch (err) {
     json(res, 400, { ok: false, error: String((err && err.message) || err) });
   }
-});
+};
 
 async function printPairing() {
   const ifaces = networkInterfaces();
   const host = pickPairingHost(ifaces, PUBLIC_HOST);
   const pairURL = RELAY
     ? `${RELAY}/#k=${b64urlEncode(KEY)}&via=relay`
-    : `http://${host.ip}:${PORT}/#k=${b64urlEncode(KEY)}`;
+    : `${SCHEME}://${host.ip}:${PORT}/#k=${b64urlEncode(KEY)}`;
 
-  console.log(`\n  awaykit daemon — v0.6 (paired · encrypted · steering · relay · push)`);
+  console.log(`\n  awaykit daemon — v0.7 (paired · encrypted · steering · relay · push${TLS ? " · TLS" : ""})`);
   console.log(`  ────────────────────────────────────────────────────────────`);
-  console.log(`  local:   http://127.0.0.1:${PORT}`);
+  console.log(`  local:   ${SCHEME}://127.0.0.1:${PORT}`);
   for (const c of candidateHosts(ifaces)) {
     const label = c.kind === "vpn" ? "remote" : "phone ";
     const reach = c.kind === "vpn" ? "any network via VPN" : "same Wi-Fi only";
-    console.log(`  ${label}:  http://${c.ip}:${PORT}   (${reach} — ${c.iface})`);
+    console.log(`  ${label}:  ${SCHEME}://${c.ip}:${PORT}   (${reach} — ${c.iface})`);
   }
   if (RELAY) console.log(`  relay :  ${RELAY}   (zero-knowledge — any network, no VPN)`);
 
@@ -384,6 +392,12 @@ async function printPairing() {
   }
   console.log(`  If the QR won't scan, open this exact URL on your phone:`);
   console.log(`  ${pairURL}\n`);
+  if (TLS && CERT) {
+    console.log(`  TLS  : self-signed HTTPS is ON — your phone warns once; accept it, and verify`);
+    console.log(`         this SHA-256 fingerprint matches what the browser shows:`);
+    console.log(`         ${CERT.fingerprint}`);
+    console.log(`         cert: ${certPaths().cert}   (a browser can't pin it — see docs/SECURITY.md)\n`);
+  }
   console.log(`  Key stored at: ${keyPath()}   (re-pair anytime with:  npm start -- --pair)`);
   console.log(subCount() > 0
     ? `  Push : ${subCount()} device(s) subscribed — you'll be notified even with the app closed`
@@ -391,44 +405,63 @@ async function printPairing() {
   console.log(`\n  Waiting for hook events on POST /hook …\n`);
 }
 
-server.on("error", (err) => {
-  if (err && err.code === "EADDRINUSE") {
-    console.error(
-      `\n  ✗ Port ${PORT} is already in use — awaykit is probably already running.\n` +
-      `\n    • Check it:    npm run status` +
-      `\n    • Restart it:  npm run restart` +
-      `\n    • Stop it:     npm run stop` +
-      `\n    • Or pick another port:  AWAYKIT_PORT=4600 npm start\n`);
+function attachErrorHandler(server) {
+  server.on("error", (err) => {
+    if (err && err.code === "EADDRINUSE") {
+      console.error(
+        `\n  ✗ Port ${PORT} is already in use — awaykit is probably already running.\n` +
+        `\n    • Check it:    npm run status` +
+        `\n    • Restart it:  npm run restart` +
+        `\n    • Stop it:     npm run stop` +
+        `\n    • Or pick another port:  AWAYKIT_PORT=4600 npm start\n`);
+      process.exit(1);
+    }
+    console.error(`\n  ✗ awaykit server error: ${(err && err.message) || err}\n`);
     process.exit(1);
-  }
-  console.error(`\n  ✗ awaykit server error: ${(err && err.message) || err}\n`);
-  process.exit(1);
-});
+  });
+}
 
-server.listen(PORT, HOST, () => {
-  printPairing();
-  if (RELAY) {
-    startRelayClient({
-      relayURL: RELAY,
-      key: KEY,
-      vapidKey: vapidPublicKey(),
-      registerClient: (c) => clients.add(c),
-      unregisterClient: (c) => clients.delete(c),
-      // A remote phone can register its Web Push subscription over the relay too.
-      onPhoneMessage: (msg) => {
-        if (!msg || msg.t !== "push-sub") return;
-        if (msg.remove && msg.endpoint) removeSub(msg.endpoint);
-        else addSub(msg.sub, "relay");
-      },
-      // Mirrors /respond's validation: per-kind allowed choices + bounded note.
-      resolvePrompt: (promptId, choice, note) => {
-        const entry = pending.get(promptId);
-        if (!entry) return;
-        const allowed = entry.kind === "stop" ? ["continue", "stop"] : ["approve", "deny"];
-        if (!allowed.includes(choice)) return;
-        entry.decide(choice, (note || "").trim().slice(0, 2000));
-      },
-      snapshot: () => [...pending.values()].map(publicPrompt),
-    });
+function startRelayIfConfigured() {
+  if (!RELAY) return;
+  startRelayClient({
+    relayURL: RELAY,
+    key: KEY,
+    vapidKey: vapidPublicKey(),
+    registerClient: (c) => clients.add(c),
+    unregisterClient: (c) => clients.delete(c),
+    // A remote phone can register its Web Push subscription over the relay too.
+    onPhoneMessage: (msg) => {
+      if (!msg || msg.t !== "push-sub") return;
+      if (msg.remove && msg.endpoint) removeSub(msg.endpoint);
+      else addSub(msg.sub, "relay");
+    },
+    // Mirrors /respond's validation: per-kind allowed choices + bounded note.
+    resolvePrompt: (promptId, choice, note) => {
+      const entry = pending.get(promptId);
+      if (!entry) return;
+      const allowed = entry.kind === "stop" ? ["continue", "stop"] : ["approve", "deny"];
+      if (!allowed.includes(choice)) return;
+      entry.decide(choice, (note || "").trim().slice(0, 2000));
+    },
+    snapshot: () => [...pending.values()].map(publicPrompt),
+  });
+}
+
+async function main() {
+  if (TLS) {
+    const ips = candidateHosts(networkInterfaces()).map((c) => c.ip);
+    CERT = await loadOrCreateCert(ips); // self-signed cert for the LAN; SANs = these IPs + loopback
   }
-});
+  const server = TLS
+    ? createHttpsServer({ key: CERT.key, cert: CERT.cert }, requestHandler)
+    : createServer(requestHandler);
+  attachErrorHandler(server);
+  server.listen(PORT, HOST, () => {
+    // Advertise the loopback endpoint so hook.js / ctl.js pick the right scheme.
+    writeEndpoint({ url: `${SCHEME}://127.0.0.1:${PORT}`, tls: TLS, port: PORT });
+    printPairing();
+    startRelayIfConfigured();
+  });
+}
+
+main();

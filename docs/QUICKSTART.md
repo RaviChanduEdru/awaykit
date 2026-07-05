@@ -151,6 +151,7 @@ That's the loop: laptop agent → encrypted channel → your phone → your deci
 | `AWAYKIT_HOME` | `~/.awaykit` | Where the pairing key is stored |
 | `AWAYKIT_STOP_WAIT_MS` | `45000` | How long the "turn finished — what next?" card waits for an answer before the agent stops normally. Keep it below the `Stop` hook's `timeout` |
 | `AWAYKIT_PUBLIC_HOST` | _(auto-detect)_ | Host/IP to encode in the pairing QR — set to your VPN address for remote access ([REMOTE.md](REMOTE.md)) |
+| `AWAYKIT_TLS` | _(off)_ | Set to `1` to serve the LAN over **self-signed HTTPS** (app-shell + channel integrity vs an active on-path attacker; also unlocks LAN push if you trust the cert). The banner prints a SHA-256 fingerprint — verify it the first time your phone warns. Relay/VPN remain the zero-friction strong paths. See [SECURITY.md](SECURITY.md). |
 
 Re-pair all devices (rotate the key): `npm start -- --pair`.
 

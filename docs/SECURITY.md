@@ -12,7 +12,7 @@ If a design decision here is wrong, please open an issue.
    (E2E encryption with mutual authentication).
 4. No third party — including us — ever holds keys or plaintext.
 
-## Implemented today (v0.6)
+## Implemented today (v0.7)
 
 The sections below (`Pairing`, `Transport`, `Authorization scopes`) describe the
 **target** design. Here is what the code actually does **right now**, and its
@@ -68,6 +68,14 @@ honest limits.
   extends "connection is the switch": awaykit intercepts and wakes a *closed* app,
   and falls back to the on-laptop prompt only when neither a live phone nor a
   subscription exists.
+- **Optional self-signed HTTPS on LAN (v0.7, `AWAYKIT_TLS=1`).** The daemon mints
+  a persistent self-signed cert (`~/.awaykit`, SANs = the LAN/VPN IPs) and serves
+  HTTPS; the banner prints a SHA-256 fingerprint to verify the first time your
+  phone warns. This gives the LAN app shell + channel TLS encryption and
+  tamper-*evidence*, and — if you trust the cert — a secure context that unlocks
+  LAN push without the relay. Loopback callers (hook shim, control CLI) find the
+  daemon via an advertised `~/.awaykit/endpoint.json` and trust the self-signed
+  cert only on loopback (where identity is meaningless — same machine).
 
 **What v0.1 defends against:** a passive Wi-Fi sniffer (sees only ciphertext);
 an unauthorized device on the same network (no `K` ⇒ can't read events, can't
@@ -76,10 +84,15 @@ auth tag rejects it).
 
 **Residual risks — NOT yet covered (tracked for later milestones):**
 
-- **App shell served over plain HTTP.** The HTML/JS is delivered unencrypted, so
-  an *active* on-path attacker (ARP spoof / rogue AP) could tamper with the
-  client code before any key is used. Full integrity needs HTTPS with a pinned
-  cert, or the native app. Today's crypto stops passive attackers, not active MITM.
+- **App shell integrity on plain-HTTP LAN (the default).** With plain HTTP the
+  HTML/JS is delivered unencrypted, so an *active* on-path attacker (ARP spoof /
+  rogue AP) could tamper with the client code before any key is used. Any HTTPS
+  transport closes this: the **zero-knowledge relay** and a **VPN** both serve the
+  shell over TLS, and `AWAYKIT_TLS=1` serves it over self-signed HTTPS on the LAN.
+  Note self-signed is tamper-*evident*, not tamper-proof — a browser can't pin the
+  cert, so verify the printed SHA-256 fingerprint on first accept; installing the
+  cert as trusted, or using the relay/VPN, is strongest. Plain-HTTP crypto stops
+  passive attackers; add TLS for active-MITM resistance.
 - **Key at rest on the phone** lives in `localStorage`. A device-scoped biometric
   gate is future work.
 - **Relay app-shell trust.** In relay mode the phone loads the app shell from

@@ -107,7 +107,10 @@ AWAYKIT_PUBLIC_HOST=<your-vpn-ip-or-hostname> npm start
   authenticates every message (see [SECURITY.md](SECURITY.md)), but the app shell
   is served over plain HTTP — so on a hostile LAN an active attacker could tamper
   with it. Over Tailscale/WireGuard the transport is itself WireGuard-encrypted
-  and authenticated, so that gap is covered. Defense in depth.
+  and authenticated, so that gap is covered. Defense in depth. On a plain LAN,
+  `AWAYKIT_TLS=1` serves self-signed HTTPS as a lighter alternative — verify the
+  printed fingerprint on first accept; a browser can't pin it, so the relay/VPN
+  remain stronger.
 - **Still private.** The daemon is only reachable on your tailnet, not the public
   internet. No third party sees your traffic.
 - **Not a relay.** This uses a VPN. A self-hosted, zero-knowledge relay (no VPN

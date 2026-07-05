@@ -16,8 +16,10 @@
  */
 
 import { describe } from "./describe.js";
+import { daemonEndpoint, daemonRequest } from "./endpoint.js";
 
-const DAEMON = process.env.AWAYKIT_URL || "http://127.0.0.1:4517";
+// Discover the daemon's loopback URL + scheme (http, or https when AWAYKIT_TLS is on).
+const { base: DAEMON, tls: DAEMON_TLS } = daemonEndpoint();
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -31,12 +33,8 @@ function readStdin() {
 }
 
 async function postDaemon(payload) {
-  const res = await fetch(`${DAEMON}/hook`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  return res.json();
+  const res = await daemonRequest(DAEMON, "/hook", { method: "POST", body: payload, tls: DAEMON_TLS });
+  return JSON.parse(res.body || "{}");
 }
 
 async function main() {
