@@ -46,6 +46,8 @@ import { initPush, vapidPublicKey, subCount, addSub, removeSub, sendPush } from 
 import { createServer as createHttpsServer } from "node:https";
 import { loadOrCreateCert, certPaths } from "./tls.js";
 import { writeEndpoint } from "./endpoint.js";
+import { createSessionManager } from "./sessions.js";
+import { delimiter as PATH_DELIM, resolve as resolvePath } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "public");
@@ -69,6 +71,14 @@ const RELAY = (process.env.AWAYKIT_RELAY || "").replace(/\/+$/, "");
 const TLS = process.argv.includes("--tls") || process.env.AWAYKIT_TLS === "1";
 const SCHEME = TLS ? "https" : "http";
 let CERT = null; // { key, cert, fingerprint } once loaded, when TLS is on
+
+/** Live chat (v0.9): drive agent sessions from the phone. OFF by default — needs
+ *  AWAYKIT_CHAT=1 *and* a non-empty AWAYKIT_PROJECTS allow-list of dirs a session
+ *  may start in. Gate mode (approval cards) is unaffected; the two modes coexist. */
+const CHAT_ON = process.env.AWAYKIT_CHAT === "1";
+const CHAT_PROJECTS = (process.env.AWAYKIT_PROJECTS || "").split(PATH_DELIM).map((p) => p.trim()).filter(Boolean).map((p) => resolvePath(p));
+const CHAT_MODEL = process.env.AWAYKIT_CHAT_MODEL || "sonnet";
+const CHAT_ENABLED = CHAT_ON && CHAT_PROJECTS.length > 0;
 
 const KEY = REPAIR ? regenerateKey() : loadOrCreateKey();
 const PUSH = initPush(); // VAPID keys + persisted push subscriptions (~/.awaykit)
@@ -156,6 +166,27 @@ function publicPrompt(p) {
   return { promptId: p.promptId, kind: p.kind, tool: p.tool, summary: p.summary, detail: p.detail, sessionId: p.sessionId, cwd: p.cwd, ts: p.ts, expiresAt: p.expiresAt || 0 };
 }
 
+/** The chat engine — only when enabled. Its events flow out via broadcast(). */
+const chat = CHAT_ENABLED ? createSessionManager({
+  broadcast,
+  audit: appendAudit,
+  projects: CHAT_PROJECTS,
+  model: CHAT_MODEL,
+  daemonUrl: `${SCHEME}://127.0.0.1:${PORT}`,
+}) : null;
+
+/** Everything a freshly-connected phone needs to render the current state. */
+function snapshotPayload() {
+  return {
+    type: "snapshot",
+    pending: [...pending.values()].map(publicPrompt),
+    vapid: vapidPublicKey(),
+    chat: CHAT_ENABLED,
+    projects: chat ? chat.projects() : [],
+    sessions: chat ? chat.snapshot() : [],
+  };
+}
+
 // ---- request routing -------------------------------------------------------
 
 const requestHandler = async (req, res) => {
@@ -206,6 +237,7 @@ const requestHandler = async (req, res) => {
       if (!isLoopback(req)) { res.writeHead(403); res.end(); return; }
       json(res, 200, { ok: true, bye: true });
       console.log("\n[awaykit] shutdown requested — closing. (paired phones will auto-reconnect if you start again)");
+      if (chat) chat.shutdown(); // don't orphan spawned agent processes
       // Flush the response first, then exit; dropping the SSE sockets tells each
       // phone to fall back to its reconnect loop.
       setTimeout(() => process.exit(0), 30).unref?.();
@@ -236,7 +268,7 @@ const requestHandler = async (req, res) => {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive" });
       res.write(": awaykit stream open\n\n");
       const client = { sendSealed: (payload) => { res.write(`event: m\ndata: ${seal(sess.sk, payload)}\n\n`); } };
-      client.sendSealed({ type: "snapshot", pending: [...pending.values()].map(publicPrompt), vapid: vapidPublicKey() });
+      client.sendSealed(snapshotPayload());
       clients.add(client);
       const keepAlive = setInterval(() => { try { res.write(": ping\n\n"); } catch {} }, 25_000);
       req.on("close", () => { clearInterval(keepAlive); clients.delete(client); });
@@ -258,6 +290,19 @@ const requestHandler = async (req, res) => {
       if (!allowed.includes(choice)) { json(res, 400, { ok: false, error: `choice must be ${allowed.join("|")}` }); return; }
       entry.decide(choice, note);
       json(res, 200, { ok: true });
+      return;
+    }
+
+    // --- live chat: drive an agent session from the phone (sealed body) ---
+    if (req.method === "POST" && pathname === "/chat") {
+      const sess = sessionOf(req);
+      if (!sess) { json(res, 401, { ok: false, error: "pair first" }); return; }
+      if (!chat) { json(res, 403, { ok: false, error: "chat disabled — start the daemon with AWAYKIT_CHAT=1 and AWAYKIT_PROJECTS set" }); return; }
+      const body = await readBody(req);
+      const msg = body && body.c ? open(sess.sk, body.c) : null;
+      if (!msg || msg.t !== "chat") { json(res, 400, { ok: false, error: "undecipherable" }); return; }
+      const r = chat.handle(msg);
+      json(res, r.ok ? 200 : 400, r);
       return;
     }
 
@@ -369,7 +414,7 @@ async function printPairing() {
     ? `${RELAY}/#k=${b64urlEncode(KEY)}&via=relay`
     : `${SCHEME}://${host.ip}:${PORT}/#k=${b64urlEncode(KEY)}`;
 
-  console.log(`\n  awaykit daemon — v0.7 (paired · encrypted · steering · relay · push${TLS ? " · TLS" : ""})`);
+  console.log(`\n  awaykit daemon — v0.9 (paired · encrypted · steering · relay · push${TLS ? " · TLS" : ""}${CHAT_ENABLED ? " · chat" : ""})`);
   console.log(`  ────────────────────────────────────────────────────────────`);
   console.log(`  local:   ${SCHEME}://127.0.0.1:${PORT}`);
   for (const c of candidateHosts(ifaces)) {
@@ -402,6 +447,15 @@ async function printPairing() {
   console.log(subCount() > 0
     ? `  Push : ${subCount()} device(s) subscribed — you'll be notified even with the app closed`
     : `  Push : none yet — open the app over HTTPS (relay/tunnel) and tap 🔔 Enable notifications`);
+  if (CHAT_ENABLED) {
+    console.log(`  Chat : ON — start & drive sessions from your phone. Allowed projects:`);
+    for (const p of CHAT_PROJECTS) console.log(`           • ${p}`);
+    console.log(`         (model: ${CHAT_MODEL}; every tool call still gates through your phone)`);
+  } else if (CHAT_ON) {
+    console.log(`  Chat : requested but OFF — set AWAYKIT_PROJECTS to an allow-list of project dirs`);
+  } else {
+    console.log(`  Chat : off — enable with AWAYKIT_CHAT=1 AWAYKIT_PROJECTS="<dir>" (see docs/LIVE-CHAT.md)`);
+  }
   console.log(`\n  Waiting for hook events on POST /hook …\n`);
 }
 
@@ -429,9 +483,11 @@ function startRelayIfConfigured() {
     vapidKey: vapidPublicKey(),
     registerClient: (c) => clients.add(c),
     unregisterClient: (c) => clients.delete(c),
-    // A remote phone can register its Web Push subscription over the relay too.
+    // A remote phone can register push subs and drive chat over the relay too.
     onPhoneMessage: (msg) => {
-      if (!msg || msg.t !== "push-sub") return;
+      if (!msg) return;
+      if (msg.t === "chat") { if (chat) chat.handle(msg); return; }
+      if (msg.t !== "push-sub") return;
       if (msg.remove && msg.endpoint) removeSub(msg.endpoint);
       else addSub(msg.sub, "relay");
     },
@@ -444,6 +500,7 @@ function startRelayIfConfigured() {
       entry.decide(choice, (note || "").trim().slice(0, 2000));
     },
     snapshot: () => [...pending.values()].map(publicPrompt),
+    fullSnapshot: () => snapshotPayload(),
   });
 }
 
@@ -462,6 +519,10 @@ async function main() {
     printPairing();
     startRelayIfConfigured();
   });
+  // Ctrl-C / kill: don't leave spawned agent sessions orphaned.
+  for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.on(sig, () => { if (chat) chat.shutdown(); process.exit(0); });
+  }
 }
 
 main();

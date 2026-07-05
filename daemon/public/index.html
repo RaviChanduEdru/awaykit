@@ -85,6 +85,43 @@
     .sheet-btn:active { transform: scale(.98); }
     .sheet-btn.danger { color: var(--no); }
     .sheet-btn.cancel { background: transparent; border-color: transparent; color: var(--muted); margin-bottom: 0; }
+
+    /* mode tabs + sessions row (live chat, v0.9) */
+    .tabs { display: flex; gap: 8px; margin: 2px 0 4px; }
+    .tab { flex: 0 0 auto; padding: 7px 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
+    .tab.active { background: rgba(79,140,255,.14); border-color: var(--accent); color: var(--accent); }
+    .sessions-row { display: flex; gap: 8px; overflow-x: auto; padding: 12px 0 4px; -webkit-overflow-scrolling: touch; }
+    .sess-chip { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+    .sess-chip.active { border-color: var(--accent); }
+    .sess-chip.new { color: var(--accent); border-style: dashed; }
+    .sess-chip .sdot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .sess-chip .sdot.running { background: var(--warn); animation: pulse 1.4s infinite; }
+    .sess-chip .sdot.idle { background: var(--ok); }
+    .sess-chip .sdot.dead { background: var(--no); }
+
+    /* conversation */
+    #chatView { display: none; }
+    .chat-log { display: flex; flex-direction: column; gap: 10px; padding: 8px 0 96px; }
+    .bubble { max-width: 86%; padding: 10px 13px; border-radius: 14px; font-size: 14.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; animation: rise .16s ease-out; }
+    .bubble.user { align-self: flex-end; background: var(--accent); color: #04101f; border-bottom-right-radius: 5px; }
+    .bubble.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); border-bottom-left-radius: 5px; }
+    .bubble.system { align-self: center; background: transparent; color: var(--muted); font-size: 12.5px; padding: 4px 10px; }
+    .bubble.tool { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--border); color: var(--accent); font-size: 12.5px; font-weight: 600; padding: 6px 11px; }
+    .bubble .cursor { display: inline-block; width: 7px; background: var(--muted); animation: blink 1s steps(2) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .chat-empty { color: var(--muted); text-align: center; padding: 48px 20px; font-size: 14px; }
+    /* inline approval cards inside a conversation sit a touch tighter */
+    .chat-log .card { align-self: stretch; margin-bottom: 0; }
+
+    /* composer (sticky bottom) */
+    .composer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; background: rgba(11,15,23,0.94); backdrop-filter: blur(10px); border-top: 1px solid var(--border); padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); display: none; }
+    .composer.on { display: block; }
+    .composer .row { max-width: 640px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
+    .composer textarea { flex: 1; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; color: var(--text); font-family: inherit; font-size: 15px; line-height: 1.4; padding: 11px 13px; resize: none; max-height: 140px; }
+    .composer textarea:focus { outline: none; border-color: var(--accent); }
+    .composer .send { flex: 0 0 auto; width: 46px; height: 46px; border-radius: 12px; background: var(--accent); color: #04101f; font-size: 19px; padding: 0; }
+    .composer .send.stop { background: var(--warn); }
+    .composer .hint { max-width: 640px; margin: 6px auto 0; font-size: 11.5px; color: var(--muted); text-align: center; }
   </style>
 </head>
 <body>
@@ -98,13 +135,36 @@
   </header>
 
   <main id="app" style="display:none">
-    <div class="section-label">Waiting for you</div>
-    <div id="pending"></div>
-    <div id="pendingEmpty" class="empty"><div class="big">✅</div>Nothing needs your approval right now.<br />Your agent is running free.</div>
-    <div class="section-label">Activity</div>
-    <div id="feed"></div>
-    <div id="feedEmpty" class="empty" style="padding:20px">No activity yet.</div>
+    <div class="tabs" id="tabs" style="display:none">
+      <div class="tab active" id="tabGate" role="button" tabindex="0">🛡️ Approvals</div>
+      <div class="tab" id="tabChat" role="button" tabindex="0">💬 Chat</div>
+    </div>
+
+    <!-- Gate mode: approval cards + activity (the original view) -->
+    <div id="gateView">
+      <div class="section-label">Waiting for you</div>
+      <div id="pending"></div>
+      <div id="pendingEmpty" class="empty"><div class="big">✅</div>Nothing needs your approval right now.<br />Your agent is running free.</div>
+      <div class="section-label">Activity</div>
+      <div id="feed"></div>
+      <div id="feedEmpty" class="empty" style="padding:20px">No activity yet.</div>
+    </div>
+
+    <!-- Chat mode: sessions row + live conversation -->
+    <div id="chatView">
+      <div class="sessions-row" id="sessionsRow"></div>
+      <div id="chatLog" class="chat-log"></div>
+      <div id="chatEmpty" class="chat-empty">Pick a project and tap <b>＋ New</b> to start a live session — then chat with your agent from here.</div>
+    </div>
   </main>
+
+  <div class="composer" id="composer">
+    <div class="row">
+      <textarea id="composerInput" rows="1" placeholder="Message your agent…" enterkeyhint="send"></textarea>
+      <button id="composerSend" class="send" title="Send">➤</button>
+    </div>
+    <div class="hint" id="composerHint">Enter to send · Shift+Enter for a new line</div>
+  </div>
 
   <div id="gate">
     <div class="box">
@@ -189,7 +249,15 @@
     const btnReconnect=document.getElementById("btnReconnect"), btnDisconnect=document.getElementById("btnDisconnect");
     const btnUnpair=document.getElementById("btnUnpair"), btnCancel=document.getElementById("btnCancel");
     const btnNotify=document.getElementById("btnNotify");
+    const tabs=document.getElementById("tabs"), tabGate=document.getElementById("tabGate"), tabChat=document.getElementById("tabChat");
+    const gateView=document.getElementById("gateView"), chatView=document.getElementById("chatView");
+    const sessionsRow=document.getElementById("sessionsRow"), chatLog=document.getElementById("chatLog"), chatEmpty=document.getElementById("chatEmpty");
+    const composer=document.getElementById("composer"), composerInput=document.getElementById("composerInput"), composerSend=document.getElementById("composerSend"), composerHint=document.getElementById("composerHint");
     const cards = new Map();
+
+    // ---------- live chat (v0.9) ----------
+    let chatEnabled=false, projects=[], mode="gate", activeSid=null;
+    const sessions=new Map(); // sid -> { sid,label,cwd,state,agentSid,model, transcript:[], streamBuf:"", streamEl:null }
 
     function showGate(title, msg){ appEl.style.display="none"; gateEl.style.display="flex"; if(title)gateTitle.textContent=title; if(msg)gateMsg.textContent=msg; setStatus(false,"not paired"); }
     function showApp(){ gateEl.style.display="none"; appEl.style.display="block"; }
@@ -204,8 +272,9 @@
       item.querySelector(".ic").textContent=icon; item.querySelector(".txt").textContent=text; item.querySelector(".t").textContent=fmtTime(Date.now());
       feedEl.prepend(item); while(feedEl.children.length>40) feedEl.removeChild(feedEl.lastChild); refreshEmpties();
     }
-    function addCard(p){
-      if (cards.has(p.promptId)) return;
+    // Build one wired approval/turn card element. `commit(choice, note)` runs the
+    // shared network action. Returned element also carries its countdown timer.
+    function buildCardEl(p, commit){
       const isStop = p.kind === "stop";
       const card=document.createElement("div"); card.className="card";
       card.innerHTML=`<div class="tool"></div><div class="summary"></div><pre></pre><div class="meta"></div>
@@ -223,7 +292,6 @@
       yes.textContent=isStop?"Continue ▶":"Approve";
       no.textContent=isStop?"Let it stop":"Deny";
       no.classList.add(isStop?"ghost":"deny");
-      // Live countdown on turn-end cards: unanswered, the agent stops normally.
       if(isStop && p.expiresAt){
         const tick=()=>{
           const left=Math.max(0,Math.ceil((p.expiresAt-Date.now())/1000));
@@ -233,39 +301,198 @@
         };
         card._cd=setInterval(tick,1000); tick();
       }
-      const respond=async(choice)=>{
-        const note=ta.value.trim();
-        yes.disabled=no.disabled=ta.disabled=true;
+      yes.onclick=()=>{ yes.disabled=no.disabled=ta.disabled=true; commit(isStop?"continue":"approve", ta.value.trim()); };
+      no.onclick=()=>{ yes.disabled=no.disabled=ta.disabled=true; commit(isStop?"stop":"deny", ta.value.trim()); };
+      if(isStop) ta.onkeydown=(e)=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); yes.click(); } };
+      return card;
+    }
+    function addCard(p){
+      if (cards.has(p.promptId)) return;
+      const commit=async(choice,note)=>{
         try {
           const sealed = seal(sessionKey,{promptId:p.promptId,choice,note});
           if (viaRelay) await relayPush(sealed);
           else await fetch("/respond",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({c:sealed})});
-        }
-        catch { yes.disabled=no.disabled=ta.disabled=false; return; }
+        } catch { removeCard(p.promptId); addCard(p); return; } // failed → re-render fresh, re-enabled
         removeCard(p.promptId);
         if(choice==="approve") pushFeed("✅","Approved: "+(p.summary||p.tool),"approved");
         else if(choice==="deny") pushFeed("⛔",note?`Denied — “${note}”`:"Denied: "+(p.summary||p.tool),"denied");
         else if(choice==="continue") pushFeed("💬",`You: ${note||"Continue"}`,"approved");
         else pushFeed("🛑","Let it stop","denied");
       };
-      yes.onclick=()=>respond(isStop?"continue":"approve");
-      no.onclick=()=>respond(isStop?"stop":"deny");
-      // Enter sends "Continue + text" on a turn-end card (Shift+Enter = newline).
-      if(isStop) ta.onkeydown=(e)=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); respond("continue"); } };
-      cards.set(p.promptId, card); pendingEl.appendChild(card); refreshEmpties();
+      const entry={ p, els:[] };
+      const gateEl=buildCardEl(p, commit); pendingEl.appendChild(gateEl); entry.els.push(gateEl);
+      // Mirror into the active conversation when this prompt belongs to a chat session.
+      entry.mkChat=()=>{ const el=buildCardEl(p, commit); chatLog.appendChild(el); entry.els.push(el); scrollChat(); return el; };
+      p.__mirror=entry.mkChat;
+      cards.set(p.promptId, entry);
+      const s=sessions.get(activeSid);
+      if(mode==="chat" && s && p.sessionId && p.sessionId===s.agentSid) entry.mkChat();
+      refreshEmpties();
     }
-    function removeCard(id){ const el=cards.get(id); if(el){ if(el._cd)clearInterval(el._cd); el.remove(); cards.delete(id);} refreshEmpties(); }
+    function removeCard(id){ const e=cards.get(id); if(e){ for(const el of e.els){ if(el._cd)clearInterval(el._cd); el.remove(); } cards.delete(id);} refreshEmpties(); }
 
     function dispatch(p){
       switch(p.type){
-        case "snapshot": cards.forEach((_,id)=>removeCard(id)); (p.pending||[]).forEach(addCard); if(p.vapid){ vapidKey=p.vapid; maybePush(); } break;
+        case "snapshot":
+          cards.forEach((_,id)=>removeCard(id)); (p.pending||[]).forEach(addCard);
+          if(p.vapid){ vapidKey=p.vapid; maybePush(); }
+          applyChatSnapshot(p);
+          break;
         case "prompt": addCard(p); if(navigator.vibrate) navigator.vibrate(80); break;
         case "resolved":
           if(p.choice==="expired" && cards.has(p.promptId)) pushFeed("⌛","Turn ended — no answer in time");
           removeCard(p.promptId); break;
         case "notify": pushFeed(p.icon||"🔔", p.text||"notification"); break;
+        // live chat events
+        case "session.state": onSessionState(p); break;
+        case "session.gone": onSessionGone(p); break;
+        case "chat.msg": onChatMsg(p); break;
+        case "chat.delta": onChatDelta(p); break;
+        case "chat.tool": onChatTool(p); break;
+        case "chat.turn": onChatTurn(p); break;
       }
     }
+
+    // ---------- chat: state + rendering ----------
+    function applyChatSnapshot(p){
+      chatEnabled = !!p.chat;
+      projects = p.projects || [];
+      tabs.style.display = chatEnabled ? "flex" : "none";
+      if(!chatEnabled){ setMode("gate"); return; }
+      // reconcile sessions from the snapshot
+      const seen=new Set();
+      for(const s of (p.sessions||[])){
+        seen.add(s.sid);
+        const cur=sessions.get(s.sid)||{ transcript:[], streamBuf:"", streamEl:null };
+        Object.assign(cur, { sid:s.sid, label:s.label, cwd:s.cwd, state:s.state, agentSid:s.agentSid||cur.agentSid||"", model:s.model });
+        if(s.transcript) cur.transcript = s.transcript.slice();
+        sessions.set(s.sid, cur);
+      }
+      for(const sid of [...sessions.keys()]) if(!seen.has(sid)) sessions.delete(sid);
+      if(activeSid && !sessions.has(activeSid)) activeSid=null;
+      if(!activeSid && sessions.size) activeSid=[...sessions.keys()][0];
+      renderSessions(); if(mode==="chat") renderChatLog();
+    }
+    function getSession(sid){ let s=sessions.get(sid); if(!s){ s={ sid, label:sid.slice(0,6), cwd:"", state:"running", agentSid:"", transcript:[], streamBuf:"", streamEl:null }; sessions.set(sid,s);} return s; }
+
+    function onSessionState(p){
+      const s=getSession(p.sid); Object.assign(s,{ label:p.label||s.label, cwd:p.cwd||s.cwd, state:p.state, agentSid:p.agentSid||s.agentSid, model:p.model||s.model });
+      if(!activeSid) activeSid=p.sid;
+      renderSessions(); if(mode==="chat" && activeSid===p.sid) renderComposer();
+    }
+    function onSessionGone(p){
+      const s=sessions.get(p.sid); if(s) s.state="dead";
+      renderSessions();
+      if(mode==="chat" && activeSid===p.sid){ appendSystemLine("Session ended."); renderComposer(); }
+    }
+    function onChatMsg(p){
+      const s=getSession(p.sid); s.transcript.push({role:p.role, text:p.text, ts:p.ts});
+      if(mode==="chat" && activeSid===p.sid) appendBubble(p.role, p.text);
+    }
+    function onChatTool(p){
+      const s=getSession(p.sid); s.transcript.push({role:"tool", text:p.name});
+      if(mode==="chat" && activeSid===p.sid) appendBubble("tool", "🔧 "+p.name);
+    }
+    function onChatDelta(p){
+      const s=getSession(p.sid); s.streamBuf+=p.text;
+      if(mode==="chat" && activeSid===p.sid){
+        if(!s.streamEl){ s.streamEl=appendBubble("assistant",""); s.streamEl.innerHTML='<span class="live"></span><span class="cursor">&nbsp;</span>'; }
+        s.streamEl.querySelector(".live").textContent=s.streamBuf;
+        scrollChat();
+      }
+    }
+    function onChatTurn(p){
+      const s=getSession(p.sid); const text=s.streamBuf.trim();
+      if(text) s.transcript.push({role:"assistant", text});
+      s.streamBuf="";
+      if(s.streamEl){ s.streamEl.textContent=text; s.streamEl=null; }
+      s.state="idle"; renderSessions(); if(mode==="chat" && activeSid===p.sid) renderComposer();
+    }
+
+    function renderSessions(){
+      sessionsRow.innerHTML="";
+      for(const s of sessions.values()){
+        const chip=document.createElement("div"); chip.className="sess-chip"+(s.sid===activeSid?" active":"");
+        chip.innerHTML=`<span class="sdot ${s.state}"></span><span class="lbl"></span>`;
+        chip.querySelector(".lbl").textContent=s.label||s.sid.slice(0,6);
+        chip.onclick=()=>{ if(s.sid===activeSid){ openSessionSheet(s); } else { activeSid=s.sid; renderSessions(); renderChatLog(); } };
+        sessionsRow.appendChild(chip);
+      }
+      const nw=document.createElement("div"); nw.className="sess-chip new"; nw.textContent="＋ New"; nw.onclick=openProjectPicker;
+      sessionsRow.appendChild(nw);
+    }
+    function renderChatLog(){
+      chatLog.innerHTML=""; const s=sessions.get(activeSid);
+      chatEmpty.style.display = (s && (s.transcript.length||s.streamBuf)) ? "none" : "block";
+      if(!s) return;
+      for(const m of s.transcript){ if(m.role==="tool") appendBubble("tool","🔧 "+m.text); else appendBubble(m.role, m.text); }
+      // re-render inline approval cards belonging to this session
+      cards.forEach((entry,id)=>{ if(entry.p && entry.p.sessionId && entry.p.sessionId===s.agentSid) mirrorCardToChat(entry.p); });
+      if(s.streamBuf){ s.streamEl=appendBubble("assistant",""); s.streamEl.innerHTML='<span class="live"></span><span class="cursor">&nbsp;</span>'; s.streamEl.querySelector(".live").textContent=s.streamBuf; }
+      renderComposer(); scrollChat();
+    }
+    function appendBubble(role, text){ const b=document.createElement("div"); b.className="bubble "+role; b.textContent=text; chatLog.appendChild(b); scrollChat(); return b; }
+    function appendSystemLine(text){ if(mode==="chat") appendBubble("system", text); }
+    function scrollChat(){ requestAnimationFrame(()=>window.scrollTo(0, document.body.scrollHeight)); }
+
+    function renderComposer(){
+      const s=sessions.get(activeSid);
+      const on = mode==="chat" && s && s.state!=="dead";
+      composer.classList.toggle("on", !!on);
+      if(on){ composerHint.textContent = s.state==="running" ? "Agent is working — your message queues for the next turn" : "Enter to send · Shift+Enter for a new line"; }
+    }
+    function setMode(m){
+      mode=m;
+      tabGate.classList.toggle("active", m==="gate"); tabChat.classList.toggle("active", m==="chat");
+      gateView.style.display = m==="gate" ? "block":"none";
+      chatView.style.display = m==="chat" ? "block":"none";
+      if(m==="chat"){ renderSessions(); renderChatLog(); } else { composer.classList.remove("on"); }
+    }
+    tabGate.onclick=()=>setMode("gate"); tabChat.onclick=()=>setMode("chat");
+    tabGate.onkeydown=(e)=>{ if(e.key==="Enter") setMode("gate"); }; tabChat.onkeydown=(e)=>{ if(e.key==="Enter") setMode("chat"); };
+
+    // ---------- chat: sending ----------
+    async function sendChat(op, extra){
+      const payload={ t:"chat", op, ...extra };
+      const sealed=seal(sessionKey, payload);
+      try {
+        if(viaRelay) await relayPush(sealed);
+        else { const r=await fetch("/chat",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({c:sealed})}); if(!r.ok){ const j=await r.json().catch(()=>({})); if(j.error) appendSystemLine("⚠ "+j.error); } }
+      } catch { appendSystemLine("⚠ couldn't reach the daemon"); }
+    }
+    function doSend(){
+      const s=sessions.get(activeSid); if(!s) return;
+      const text=composerInput.value.trim(); if(!text) return;
+      composerInput.value=""; composerInput.style.height="auto";
+      sendChat("send",{ sid:activeSid, text });
+    }
+    composerSend.onclick=doSend;
+    composerInput.addEventListener("input",()=>{ composerInput.style.height="auto"; composerInput.style.height=Math.min(composerInput.scrollHeight,140)+"px"; });
+    composerInput.addEventListener("keydown",(e)=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); doSend(); } });
+
+    // ---------- chat: project picker + session actions (reuse the sheet look) ----------
+    function popSheet(title, buttons){
+      const ov=document.createElement("div"); ov.className="sheet open";
+      const box=document.createElement("div"); box.className="sheet-box";
+      const h=document.createElement("div"); h.className="sheet-title"; h.textContent=title; box.appendChild(h);
+      for(const b of buttons){ const btn=document.createElement("button"); btn.className="sheet-btn"+(b.cls?(" "+b.cls):""); btn.textContent=b.label; btn.onclick=()=>{ ov.remove(); b.onClick&&b.onClick(); }; box.appendChild(btn); }
+      const cancel=document.createElement("button"); cancel.className="sheet-btn cancel"; cancel.textContent="Cancel"; cancel.onclick=()=>ov.remove(); box.appendChild(cancel);
+      ov.appendChild(box); ov.onclick=(e)=>{ if(e.target===ov) ov.remove(); }; document.body.appendChild(ov);
+    }
+    function openProjectPicker(){
+      if(!projects.length){ popSheet("No projects allow-listed", [{label:"Set AWAYKIT_PROJECTS on the laptop", cls:"cancel", onClick:()=>{}}]); return; }
+      popSheet("Start a session in…", projects.map((dir)=>({ label:"📁 "+dir.split(/[\\/]/).pop(), onClick:()=>sendChat("start",{ projectDir:dir }) })));
+    }
+    function openSessionSheet(s){
+      popSheet(s.label||"Session", [
+        { label:"⏹  Interrupt current turn", onClick:()=>sendChat("interrupt",{ sid:s.sid }) },
+        { label:"🗑  End this session", cls:"danger", onClick:()=>sendChat("kill",{ sid:s.sid }) },
+      ]);
+    }
+
+    /** Mirror a pending approval card into the active conversation (chat mode). */
+    function mirrorCardToChat(p){ /* set by addCard via cards registry; see addCard */ if(typeof p.__mirror==="function") p.__mirror(); }
 
     // ---------- pairing handshake + encrypted stream ----------
     let es = null, reconnectT = null, paused = false;   // paused = user tapped Disconnect

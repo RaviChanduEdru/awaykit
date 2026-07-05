@@ -132,6 +132,31 @@ The phone client is scoped to the **agent session protocol**, not a shell:
 
 Every action is logged locally to an append-only audit file.
 
+## Live chat (v0.9)
+
+Chat mode lets the phone **start and drive** agent sessions, not just answer
+prompts. Honest framing: a paired phone can already make the agent run anything
+(it approves `Bash`), so chat removes *friction* from an existing capability
+rather than granting a new one. It ships hardened regardless:
+
+- **Off by default.** Requires `AWAYKIT_CHAT=1` **and** a non-empty
+  `AWAYKIT_PROJECTS` allow-list. Without both, `/chat` returns 403 and no session
+  manager exists.
+- **Allow-listed dirs only.** A session can start only in a directory on the
+  allow-list; arbitrary paths are rejected server-side (`session.prompt` can't
+  escape into `cwd` of your choosing).
+- **No permission bypass.** Managed sessions run `--permission-mode default` and
+  never `--dangerously-skip-permissions`; the daemon injects its own hook config
+  so **every tool call still crosses your phone** as an approval card. `shell.full`
+  remains off.
+- **Fully audited.** Every `start` / `send` / `interrupt` / `kill` (with text)
+  is written to the append-only audit log.
+- **In-memory transcripts.** Conversation history lives in memory (bounded ring);
+  the durable record is your repo + Claude's own session files.
+
+Residual: the injected hook settings file (`~/.awaykit/chat-hook-settings.json`)
+points at `hook.js`; treat `~/.awaykit` with the same trust as the daemon itself.
+
 ## Out of scope (for now)
 
 - Protecting against a fully compromised laptop or phone OS

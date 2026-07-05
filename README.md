@@ -97,6 +97,22 @@ moment the agent needs you — even with the app closed. The daemon sends the pu
 outbound itself; the payload is end-to-end encrypted to your device (RFC 8291), so
 the relay and the push service only ever forward ciphertext.
 
+**💬 Live chat (v0.9).** Beyond approving — *drive* a session from your phone. The
+app has two modes you switch between freely: **🛡️ Approvals** (the gate — cards
+only, the default) and **💬 Chat**. In Chat you **＋ New** a session in a project
+you allow-listed, then talk to your agent: the reply streams in token by token,
+you send follow-ups any time, tool calls still pop up as approval cards **inline in
+the conversation**, and you can **interrupt** or **end** a turn. It's off by
+default — opt in on the laptop:
+
+```bash
+AWAYKIT_CHAT=1 AWAYKIT_PROJECTS="/path/to/repo" npm start
+```
+
+Chat sessions gate every tool through your phone with **zero extra hook setup**
+(the daemon injects its own hook config), never skip permissions, and audit every
+message. Full design + security model: **[docs/LIVE-CHAT.md](docs/LIVE-CHAT.md)**.
+
 ## Works with your coding agent
 
 awaykit isn't tied to Claude Code — the daemon is agent-neutral, and each agent
@@ -145,7 +161,8 @@ phone automatically, no re-scan needed (the pairing key persists).
 - ✅ **v0.6** — push notifications: your phone buzzes even when the app is closed. Works over HTTPS (relay/tunnel); the payload is E2E-encrypted (RFC 8291), so the relay and push service see only ciphertext.
 - ✅ **v0.7** — optional self-signed HTTPS on the LAN (`AWAYKIT_TLS=1`): app-shell + channel integrity vs an active on-path attacker, with a verifiable SHA-256 fingerprint; also unlocks LAN push without the relay.
 - ✅ **v0.8** — agent-agnostic adapters: approve/deny from your phone with **Codex CLI, Cursor CLI, Gemini CLI, and OpenCode** too, plus `awaykit-ask` to gate any command in any tool.
-- ⏭️ Next: v1.0 — audited security model, reproducible builds.
+- ✅ **v0.9** — **live chat**: start and *drive* a Claude Code session from your phone — stream the reply token by token, send follow-ups, approve tools inline, interrupt, kill. Off by default; opt in with `AWAYKIT_CHAT=1` + an `AWAYKIT_PROJECTS` allow-list. See [docs/LIVE-CHAT.md](docs/LIVE-CHAT.md).
+- ⏭️ Next: v1.0 — audited security model, reproducible builds; more chat drivers + opt-in PTY attach.
 
 Star/watch the repo to follow along.
 
@@ -160,7 +177,8 @@ Star/watch the repo to follow along.
 - [x] v0.6 — push notifications (wake the phone even with the app closed, over HTTPS)
 - [x] v0.7 — integrity vs an active on-path attacker: optional self-signed HTTPS on LAN (`AWAYKIT_TLS`)
 - [x] v0.8 — agent-agnostic adapters (Codex, Cursor, Gemini CLI, OpenCode; `awaykit-ask` for anything else)
-- [ ] v1.0 — audited security model, reproducible builds
+- [x] v0.9 — live chat: start & drive agent sessions from the phone (stream, steer, approve inline, interrupt)
+- [ ] v1.0 — audited security model, reproducible builds; more chat drivers + opt-in PTY attach
 
 ## Contributing
 

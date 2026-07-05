@@ -141,6 +141,30 @@ Restart Claude Code (or run `/hooks`) so it picks up the new hooks.
 
 That's the loop: laptop agent → encrypted channel → your phone → your decision (or instructions) → laptop agent.
 
+## 5. Live chat — drive a session from your phone (v0.9, opt-in)
+
+Approvals (above) are awaykit's default *Gate mode*. **Chat mode** lets you start
+and steer a Claude Code session from the phone. It's **off by default**; enable it
+on the laptop with a project allow-list — sessions may only start in these dirs:
+
+```bash
+AWAYKIT_CHAT=1 AWAYKIT_PROJECTS="/path/to/repoA:/path/to/repoB" npm start
+```
+
+(Use `;` between paths on Windows.) Then on the phone:
+
+1. Tap the **💬 Chat** tab (it appears only when chat is enabled).
+2. Tap **＋ New** and pick a project → a live session starts.
+3. Type in the composer and send. The agent's reply **streams in live**; send
+   follow-ups any time.
+4. When the agent uses a tool, its **approval card appears inline in the chat** —
+   approve/deny right there (chat sessions are gated with **no extra hook setup**;
+   the daemon injects its own). Tap the session chip for **Interrupt** / **End**.
+
+Nothing about the trust model relaxes: chat sessions run with normal permissions
+(every tool still crosses your phone), only start in allow-listed dirs, and every
+message is audited. Full design + threat model: **[LIVE-CHAT.md](LIVE-CHAT.md)**.
+
 ## Configuration
 
 | Env var | Default | Meaning |
@@ -152,6 +176,9 @@ That's the loop: laptop agent → encrypted channel → your phone → your deci
 | `AWAYKIT_STOP_WAIT_MS` | `45000` | How long the "turn finished — what next?" card waits for an answer before the agent stops normally. Keep it below the `Stop` hook's `timeout` |
 | `AWAYKIT_PUBLIC_HOST` | _(auto-detect)_ | Host/IP to encode in the pairing QR — set to your VPN address for remote access ([REMOTE.md](REMOTE.md)) |
 | `AWAYKIT_TLS` | _(off)_ | Set to `1` to serve the LAN over **self-signed HTTPS** (app-shell + channel integrity vs an active on-path attacker; also unlocks LAN push if you trust the cert). The banner prints a SHA-256 fingerprint — verify it the first time your phone warns. Relay/VPN remain the zero-friction strong paths. See [SECURITY.md](SECURITY.md). |
+| `AWAYKIT_CHAT` | _(off)_ | Set to `1` to enable **live chat** (drive sessions from the phone). Requires `AWAYKIT_PROJECTS`; off without it. See [LIVE-CHAT.md](LIVE-CHAT.md). |
+| `AWAYKIT_PROJECTS` | _(none)_ | Allow-list of project dirs a chat session may start in (`:`-separated on macOS/Linux, `;` on Windows). |
+| `AWAYKIT_CHAT_MODEL` | `sonnet` | Model alias for phone-started chat sessions. |
 
 Re-pair all devices (rotate the key): `npm start -- --pair`.
 

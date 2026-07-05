@@ -33,7 +33,7 @@ const MAX_SESSIONS = 8;        // sanity cap on concurrent remote phones
  * @param {()=>Array} opts.snapshot         current pending prompts (public shape)
  * @param {(msg:string)=>void} [opts.log]
  */
-export function startRelayClient({ relayURL, key, registerClient, unregisterClient, resolvePrompt, snapshot, vapidKey = "", onPhoneMessage = () => {}, log = console.log }) {
+export function startRelayClient({ relayURL, key, registerClient, unregisterClient, resolvePrompt, snapshot, fullSnapshot = null, vapidKey = "", onPhoneMessage = () => {}, log = console.log }) {
   const base = relayURL.replace(/\/+$/, "");
   const room = roomIdFromKey(key);
   const sessions = new Set(); // { sk, lastSeen, sendSealed }
@@ -69,7 +69,7 @@ export function startRelayClient({ relayURL, key, registerClient, unregisterClie
         const oldest = [...sessions].sort((a, b) => a.lastSeen - b.lastSeen)[0];
         drop(oldest);
       }
-      client.sendSealed({ type: "snapshot", pending: snapshot(), vapid: vapidKey });
+      client.sendSealed(fullSnapshot ? fullSnapshot() : { type: "snapshot", pending: snapshot(), vapid: vapidKey });
       log(`[awaykit] remote phone connected via relay (${sessions.size} remote session${sessions.size === 1 ? "" : "s"})`);
       return;
     }

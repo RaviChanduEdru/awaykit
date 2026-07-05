@@ -25,6 +25,10 @@ async function main() {
   const ev = await readStdinJSON();
   if (!ev) process.exit(0);
   const event = ev.hook_event_name || "";
+  // A session the awaykit daemon spawned itself (live chat) sets this. In chat
+  // mode the phone's composer IS "what next?", so we skip the turn-end card —
+  // but tool-call gating (PreToolUse) and notifications still flow.
+  const managed = process.env.AWAYKIT_MANAGED === "1";
 
   try {
     if (event === "Notification") {
@@ -38,6 +42,7 @@ async function main() {
     }
 
     if (event === "Stop") {
+      if (managed) process.exit(0); // chat mode: composer replaces the turn-end card
       // Ask the phone "what next?". If it answers with an instruction, hold the
       // turn open (decision: "block") — Claude Code treats the reason as the
       // user's next marching orders. No phone / no answer / "let it stop" →
