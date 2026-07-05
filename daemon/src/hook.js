@@ -18,8 +18,47 @@
  *  new agents live in src/adapters/. Shared logic is in agent-core.js.)
  */
 
+import { openSync, readSync, closeSync, statSync } from "node:fs";
 import { describe } from "./describe.js";
-import { readStdinJSON, requestPermission, requestStop, notify } from "./agent-core.js";
+import { readStdinJSON, requestPermission, requestStop, notify, activity } from "./agent-core.js";
+
+/**
+ * Pull the agent's FINAL message out of the session transcript (JSONL). Reads
+ * only the tail of the file, walks backwards to the last assistant text. This
+ * is what makes the phone's turn-end card readable: you see what Claude said,
+ * not just "turn finished". Fail-safe: any problem → "".
+ */
+function lastAssistantText(path, cap = 1500) {
+  try {
+    const size = statSync(path).size;
+    const take = Math.min(size, 262_144);
+    const fd = openSync(path, "r");
+    const buf = Buffer.alloc(take);
+    readSync(fd, buf, 0, take, size - take);
+    closeSync(fd);
+    const lines = buf.toString("utf8").split("\n").filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let j; try { j = JSON.parse(lines[i]); } catch { continue; } // first tail line may be a partial record
+      if (j.type !== "assistant" || !j.message) continue;
+      const txt = (j.message.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
+      if (txt) return txt.length > cap ? txt.slice(0, cap) + "…" : txt;
+    }
+  } catch { /* fail-safe */ }
+  return "";
+}
+
+/** One compact "what the tool DID" line for the phone's activity/chat log. */
+function outcomeLine(ev) {
+  const tool = ev.tool_name || "tool";
+  const icon = tool === "Bash" ? "▶" : /Write|Edit|Notebook/.test(tool) ? "✏️" : tool === "WebFetch" ? "🌐" : "🔧";
+  const { summary } = describe(tool, ev.tool_input);
+  const r = ev.tool_response;
+  let out = "";
+  if (typeof r === "string") out = r;
+  else if (r && typeof r === "object") out = r.stdout || r.output || r.stderr || (r.success === false ? "failed" : "");
+  out = String(out).trim().replace(/\s+/g, " ").slice(0, 160);
+  return { icon, text: summary + (out ? " → " + out : " → done") };
+}
 
 async function main() {
   const ev = await readStdinJSON();
@@ -41,13 +80,22 @@ async function main() {
       process.exit(0);
     }
 
+    if (event === "PostToolUse") {
+      // Report what the tool DID (not just that it ran) — a permanent line on
+      // the phone: "▶ Run: npm test → 5 passing". Both modes, both sessions.
+      const { icon, text } = outcomeLine(ev);
+      await activity({ icon, text, sessionId: ev.session_id || "" });
+      process.exit(0);
+    }
+
     if (event === "Stop") {
       if (managed) process.exit(0); // chat mode: composer replaces the turn-end card
-      // Ask the phone "what next?". If it answers with an instruction, hold the
-      // turn open (decision: "block") — Claude Code treats the reason as the
-      // user's next marching orders. No phone / no answer / "let it stop" →
-      // exit silently and the agent stops normally.
-      const result = await requestStop({ sessionId: ev.session_id, cwd: ev.cwd, stopActive: !!ev.stop_hook_active });
+      // Ask the phone "what next?" — and include the agent's FINAL RESPONSE so
+      // the question is answerable: you read what it said/did, then reply. If
+      // the phone answers with an instruction, hold the turn open (decision:
+      // "block"). No phone / no answer / "let it stop" → agent stops normally.
+      const lastResponse = ev.transcript_path ? lastAssistantText(ev.transcript_path) : "";
+      const result = await requestStop({ sessionId: ev.session_id, cwd: ev.cwd, stopActive: !!ev.stop_hook_active, lastResponse });
       if (result && result.choice === "continue") {
         process.stdout.write(JSON.stringify({
           decision: "block",

@@ -43,12 +43,20 @@ export function requestPermission({ tool, summary, detail = "", sessionId = "", 
   return callDaemon({ kind: "permission", tool: tool || "permission", summary, detail, sessionId, cwd });
 }
 
-/** Ask the phone "what next?" at the end of a turn. Returns { choice, note }. */
-export function requestStop({ sessionId = "", cwd = "", stopActive = false }) {
-  return callDaemon({ kind: "stop", sessionId, cwd, stopActive });
+/** Ask the phone "what next?" at the end of a turn. Returns { choice, note }.
+ *  `lastResponse` (the agent's final message) is shown on the phone so the
+ *  answer is informed — you read what it said, then say what's next. */
+export function requestStop({ sessionId = "", cwd = "", stopActive = false, lastResponse = "" }) {
+  return callDaemon({ kind: "stop", sessionId, cwd, stopActive, lastResponse });
 }
 
 /** Fire a one-off note into the phone's Activity feed (no decision expected). */
 export function notify({ icon = "🔔", text = "agent event" }) {
   return callDaemon({ kind: "notify", icon, text });
+}
+
+/** Report what a tool actually DID (a PostToolUse result line): "▶ npm test →
+ *  5 passing". Lands as a permanent action line on the phone. Fire-and-forget. */
+export function activity({ icon = "🔧", text = "", sessionId = "" }) {
+  return callDaemon({ kind: "activity", icon, text, sessionId });
 }

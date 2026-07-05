@@ -65,7 +65,7 @@ function runHook(input, env = {}) {
 const child = spawn(process.execPath, [DAEMON], {
   env: {
     ...process.env, AWAYKIT_HOME: HOME, AWAYKIT_PORT: String(PORT), AWAYKIT_HOST: "127.0.0.1",
-    AWAYKIT_CHAT: "1", AWAYKIT_PROJECTS: PROJECT,
+    AWAYKIT_CHAT: "1", AWAYKIT_PROJECTS: PROJECT, AWAYKIT_STOP_WAIT_MS: "1200",
     AWAYKIT_AGENT_CMD: JSON.stringify(["node", FAKE]),
   },
   stdio: "ignore",
@@ -137,6 +137,36 @@ try {
   // hook.js managed-session behavior: a Stop in a managed session emits nothing
   const managedStop = await runHook({ hook_event_name: "Stop", session_id: "x" }, { AWAYKIT_MANAGED: "1" });
   ok(managedStop.out.trim() === "" && managedStop.code === 0, "managed Stop hook stays silent (composer replaces the turn-end card)");
+
+  // ---- ↩ Continue (adopt): a turn finished elsewhere becomes a phone session ----
+
+  // an external (e.g. VS Code) session finishes a turn in an allow-listed dir …
+  const extStop = req("POST", "/hook", { body: { kind: "stop", sessionId: "vscode-sess-1", cwd: PROJECT, lastResponse: "Finished wiring feature X — tests green." } });
+  ok(await until(() => events.some((e) => e.type === "agent.msg" && e.text.includes("feature X")), 2000), "the external session's final response reaches the phone");
+  const extCard = events.filter((e) => e.type === "prompt" && e.kind === "stop").pop();
+  ok(extCard && (extCard.detail || "").includes("feature X"), "its turn-end card shows what was done");
+  await req("POST", "/respond", { headers: { cookie }, body: { c: seal(sk, { promptId: extCard.promptId, choice: "stop" }) } });
+  await extStop;
+
+  // … a fresh phone (new snapshot) sees it as continuable …
+  const eph2 = nacl.box.keyPair();
+  const sess2 = await req("POST", "/session", { body: { proof: seal(key, { p: "awaykit-session", t: Date.now(), epk: b64e(eph2.publicKey) }) } });
+  const cookie2 = sess2.headers["set-cookie"][0].split(";")[0];
+  const sk2 = nacl.box.before(b64d(openS(key, JSON.parse(sess2.body).edk).dpk), eph2.secretKey);
+  const events2 = [];
+  const stream2 = await sseConnect(cookie2, (d) => { const p = openS(sk2, d); if (p) events2.push(p); });
+  await until(() => events2.some((e) => e.type === "snapshot"), 2000);
+  const snap2 = events2.find((e) => e.type === "snapshot");
+  ok((snap2.recentTurns || []).some((t) => t.agentSid === "vscode-sess-1" && t.snippet.includes("feature X")), "snapshot lists the finished turn as ↩ continuable");
+
+  // … and adopting it starts a session that resumes that conversation
+  const adopted = JSON.parse((await chat("start", { projectDir: PROJECT, resumeId: "vscode-sess-1", label: "↩ proj" })).body);
+  ok(adopted.ok, "adopt (start with resumeId) is accepted");
+  ok(await until(() => events.some((e) => e.type === "session.state" && e.sid === adopted.sid && e.label === "↩ proj" && e.agentSid === "vscode-sess-1"), 4000), "adopted session carries the original conversation id (--resume) and ↩ label");
+  await chat("kill", { sid: adopted.sid });
+  const audit3 = JSON.parse((await req("GET", "/audit")).body).entries;
+  ok(audit3.some((e) => e.decision === "chat-start" && /adopt/.test(e.summary)), "adoption is audited as an adopt");
+  stream2.close();
 
   stream.close();
   console.log(`\nALL ${passed} CHAT CHECKS PASSED ✅`);

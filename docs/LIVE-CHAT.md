@@ -229,13 +229,19 @@ open questions empirically. **Findings (run 2026-07-05, model haiku):**
 card inline, send a follow-up, kill the session. All while the laptop lid
 never opens.
 
-### Phase 2 — polish that makes it daily-drivable (v0.9.x)
-- Interrupt (spike-informed: control message or kill+resume).
-- Reattach after daemon restart (`--resume` by stored session id).
-- Multiple concurrent sessions; per-session unread badges.
-- Push notifications on "reply finished" / "needs approval" for chat sessions.
-- Turn cost/duration surfaced from `result` events.
-- Composer conveniences: quick-replies, resend-on-reconnect.
+### Phase 2 — polish that makes it daily-drivable (v0.9.x / v0.10)
+- ✅ Interrupt (control_request — shipped in v0.9).
+- ✅ **Mission control (v0.10):** turn-end cards carry the agent's **final
+  response** (Stop hook reads the transcript tail); **PostToolUse** result lines
+  ("▶ npm test → 5 passing") land as permanent `agent.act` entries in the feed
+  and chat; a model·project·state header tops every conversation.
+- ✅ **↩ Continue / adopt (v0.10):** a turn that finishes in an EXTERNAL session
+  (e.g. VS Code) in an allow-listed dir is recorded (`recentTurns`, last 5) and
+  offered in the phone's ＋New picker — adopting spawns `--resume <id>`, so the
+  phone picks up the laptop conversation with full context. Caveat: resuming
+  **forks** — phone turns don't flow back into the still-open laptop pane.
+- Remaining: per-session unread badges; push on "reply finished" for chat
+  sessions; quick-replies; resend-on-reconnect.
 
 ### Phase 3 — beyond Claude (v1.0 track)
 - Second structured driver to prove the abstraction. **OpenCode first** (it has

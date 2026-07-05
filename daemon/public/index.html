@@ -107,6 +107,9 @@
     .bubble.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); border-bottom-left-radius: 5px; }
     .bubble.system { align-self: center; background: transparent; color: var(--muted); font-size: 12.5px; padding: 4px 10px; }
     .bubble.tool { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--border); color: var(--accent); font-size: 12.5px; font-weight: 600; padding: 6px 11px; }
+    .bubble.act { align-self: stretch; max-width: 100%; background: transparent; border: 1px dashed var(--border); color: var(--muted); font: 12px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; padding: 7px 11px; }
+    .sess-header { font-size: 12px; color: var(--muted); padding: 2px 4px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sess-header b { color: var(--accent); font-weight: 600; }
     .bubble .cursor { display: inline-block; width: 7px; background: var(--muted); animation: blink 1s steps(2) infinite; }
     @keyframes blink { 50% { opacity: 0; } }
     .chat-empty { color: var(--muted); text-align: center; padding: 48px 20px; font-size: 14px; }
@@ -153,6 +156,7 @@
     <!-- Chat mode: sessions row + live conversation -->
     <div id="chatView">
       <div class="sessions-row" id="sessionsRow"></div>
+      <div id="sessHeader" class="sess-header" style="display:none"></div>
       <div id="chatLog" class="chat-log"></div>
       <div id="chatEmpty" class="chat-empty">Pick a project and tap <b>＋ New</b> to start a live session — then chat with your agent from here.</div>
     </div>
@@ -256,8 +260,9 @@
     const cards = new Map();
 
     // ---------- live chat (v0.9) ----------
-    let chatEnabled=false, projects=[], mode="gate", activeSid=null;
+    let chatEnabled=false, projects=[], recentTurns=[], mode="gate", activeSid=null;
     const sessions=new Map(); // sid -> { sid,label,cwd,state,agentSid,model, transcript:[], streamBuf:"", streamEl:null }
+    const sessHeader=document.getElementById("sessHeader");
 
     function showGate(title, msg){ appEl.style.display="none"; gateEl.style.display="flex"; if(title)gateTitle.textContent=title; if(msg)gateMsg.textContent=msg; setStatus(false,"not paired"); }
     function showApp(){ gateEl.style.display="none"; appEl.style.display="block"; }
@@ -351,13 +356,30 @@
         case "chat.delta": onChatDelta(p); break;
         case "chat.tool": onChatTool(p); break;
         case "chat.turn": onChatTurn(p); break;
+        // mission control: what the agent SAID / what tools DID (any session)
+        case "agent.msg": routeAgent(p, "assistant", p.text, "💬"); break;
+        case "agent.act": routeAgent(p, "act", (p.icon||"🔧")+" "+p.text, p.icon||"🔧"); break;
       }
+    }
+
+    // Route an agent event to the right place: into the matching chat
+    // conversation if one exists for that agent session, else the Gate feed.
+    function routeAgent(p, role, text, icon){
+      let target=null;
+      for(const s of sessions.values()) if(p.sessionId && s.agentSid && s.agentSid===p.sessionId){ target=s; break; }
+      if(target){
+        target.transcript.push({role, text});
+        if(mode==="chat" && activeSid===target.sid) appendBubble(role, text);
+        return;
+      }
+      pushFeed(icon, (role==="assistant"?"Claude: ":"")+String(text).slice(0,500));
     }
 
     // ---------- chat: state + rendering ----------
     function applyChatSnapshot(p){
       chatEnabled = !!p.chat;
       projects = p.projects || [];
+      recentTurns = p.recentTurns || [];
       tabs.style.display = chatEnabled ? "flex" : "none";
       if(!chatEnabled){ setMode("gate"); return; }
       // reconcile sessions from the snapshot
@@ -421,6 +443,14 @@
       }
       const nw=document.createElement("div"); nw.className="sess-chip new"; nw.textContent="＋ New"; nw.onclick=openProjectPicker;
       sessionsRow.appendChild(nw);
+      // mission-control header: model · project · state — always know what
+      // you're talking to and where it acts.
+      const a=sessions.get(activeSid);
+      if(a){ sessHeader.style.display="block"; sessHeader.innerHTML="<b></b> · <span class='cwd'></span> · <span class='st'></span>";
+        sessHeader.querySelector("b").textContent=a.model||"agent";
+        sessHeader.querySelector(".cwd").textContent=a.cwd||"?";
+        sessHeader.querySelector(".st").textContent=a.state; }
+      else sessHeader.style.display="none";
     }
     function renderChatLog(){
       chatLog.innerHTML=""; const s=sessions.get(activeSid);
@@ -482,7 +512,15 @@
     }
     function openProjectPicker(){
       if(!projects.length){ popSheet("No projects allow-listed", [{label:"Set AWAYKIT_PROJECTS on the laptop", cls:"cancel", onClick:()=>{}}]); return; }
-      popSheet("Start a session in…", projects.map((dir)=>({ label:"📁 "+dir.split(/[\\/]/).pop(), onClick:()=>sendChat("start",{ projectDir:dir }) })));
+      const ago=(ts)=>{ const m=Math.max(1,Math.round((Date.now()-ts)/60000)); return m<60?m+"m ago":Math.round(m/60)+"h ago"; };
+      const base=(d)=>d.split(/[\\/]/).pop();
+      const buttons=[
+        // ↩ Continue a session that finished elsewhere (e.g. your laptop) —
+        // --resume brings its full context to the phone.
+        ...recentTurns.map((t)=>({ label:"↩ Continue "+base(t.cwd)+" · "+ago(t.ts), onClick:()=>sendChat("start",{ projectDir:t.cwd, resumeId:t.agentSid, label:"↩ "+base(t.cwd) }) })),
+        ...projects.map((dir)=>({ label:"📁 New in "+base(dir), onClick:()=>sendChat("start",{ projectDir:dir }) })),
+      ];
+      popSheet("Start a session…", buttons);
     }
     function openSessionSheet(s){
       popSheet(s.label||"Session", [

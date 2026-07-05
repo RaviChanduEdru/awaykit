@@ -57,7 +57,7 @@ function agentCommand({ model, resumeId, settingsPath }) {
   if (override) {
     // Fake/alt agent: give it the same stream flags (it may ignore them) + cwd.
     const base = JSON.parse(override);
-    return { cmd: base[0], args: [...base.slice(1), ...streamFlags], shell: false };
+    return { cmd: base[0], args: [...base.slice(1), ...streamFlags, ...(resumeId ? ["--resume", resumeId] : [])], shell: false };
   }
   // On Windows `claude` is a .cmd shim → needs shell:true to be spawnable. With
   // shell:true Node concatenates args unquoted, so we pass --settings as a FILE
@@ -83,6 +83,9 @@ function hookSettingsPath() {
   const settings = {
     hooks: {
       PreToolUse: [{ matcher: "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch", hooks: [{ type: "command", command: cmd, timeout: 3600 }] }],
+      // PostToolUse turns "it ran" into "here's what it did" — permanent
+      // action lines (▶ / ✏️) in the phone's conversation.
+      PostToolUse: [{ matcher: "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch", hooks: [{ type: "command", command: cmd }] }],
       Notification: [{ matcher: ".*", hooks: [{ type: "command", command: cmd }] }],
     },
   };
@@ -195,13 +198,16 @@ export function createSessionManager({ broadcast, audit, projects, model = "sonn
 
   // ---- public ops -----------------------------------------------------------
 
-  function start({ projectDir, label } = {}) {
+  function start({ projectDir, label, resumeId } = {}) {
     if (live.size >= MAX_SESSIONS) return { ok: false, error: `too many sessions (max ${MAX_SESSIONS})` };
     const dir = resolve(projectDir || "");
     if (!allow.includes(dir)) return { ok: false, error: "project not in AWAYKIT_PROJECTS allow-list" };
 
     const sid = randomUUID();
-    const { cmd, args, shell } = agentCommand({ model, settingsPath: hookSettingsPath() });
+    // resumeId = adopt an existing conversation (e.g. the one you ran in VS
+    // Code): --resume keeps its full context, so the phone picks up where the
+    // laptop stopped. Note: this forks — phone turns won't appear on the laptop.
+    const { cmd, args, shell } = agentCommand({ model, settingsPath: hookSettingsPath(), resumeId: resumeId || "" });
     let proc;
     try {
       proc = spawn(cmd, args, {
@@ -212,10 +218,10 @@ export function createSessionManager({ broadcast, audit, projects, model = "sonn
     } catch (e) {
       return { ok: false, error: `spawn failed: ${(e && e.message) || e}` };
     }
-    const s = { sid, proc, cwd: dir, label: label || basename(dir), state: "running", model, ts: Date.now(), transcript: [], cur: "", err: "", agentSid: "" };
+    const s = { sid, proc, cwd: dir, label: label || (resumeId ? "↩ " + basename(dir) : basename(dir)), state: "running", model, ts: Date.now(), transcript: [], cur: "", err: "", agentSid: resumeId || "" };
     live.set(sid, s);
     wire(s);
-    audit({ tool: "chat", summary: `start session in ${basename(dir)}`, cwd: dir, sessionId: sid, decision: "chat-start" });
+    audit({ tool: "chat", summary: `${resumeId ? "adopt (resume) session" : "start session"} in ${basename(dir)}`, cwd: dir, sessionId: sid, decision: "chat-start" });
     broadcast({ type: "session.state", ...publicState(s) });
     log(`[awaykit] chat session ${sid.slice(0, 8)} started in ${dir}`);
     return { ok: true, sid };
@@ -256,7 +262,7 @@ export function createSessionManager({ broadcast, audit, projects, model = "sonn
   /** Route a sealed {t:"chat", op, …} message from any phone (local or relay). */
   function handle(msg) {
     switch (msg && msg.op) {
-      case "start": return start({ projectDir: msg.projectDir, label: msg.label });
+      case "start": return start({ projectDir: msg.projectDir, label: msg.label, resumeId: typeof msg.resumeId === "string" ? msg.resumeId.slice(0, 64) : "" });
       case "send": return send({ sid: msg.sid, text: msg.text });
       case "interrupt": return interrupt({ sid: msg.sid });
       case "kill": return kill({ sid: msg.sid });

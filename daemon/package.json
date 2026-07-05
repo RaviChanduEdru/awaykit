@@ -1,6 +1,6 @@
 {
   "name": "awaykit",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Control your laptop's AI coding sessions from your phone — self-hosted, E2E encrypted.",
   "type": "module",
   "bin": {

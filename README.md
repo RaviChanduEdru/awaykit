@@ -162,6 +162,7 @@ phone automatically, no re-scan needed (the pairing key persists).
 - ✅ **v0.7** — optional self-signed HTTPS on the LAN (`AWAYKIT_TLS=1`): app-shell + channel integrity vs an active on-path attacker, with a verifiable SHA-256 fingerprint; also unlocks LAN push without the relay.
 - ✅ **v0.8** — agent-agnostic adapters: approve/deny from your phone with **Codex CLI, Cursor CLI, Gemini CLI, and OpenCode** too, plus `awaykit-ask` to gate any command in any tool.
 - ✅ **v0.9** — **live chat**: start and *drive* a Claude Code session from your phone — stream the reply token by token, send follow-ups, approve tools inline, interrupt, kill. Off by default; opt in with `AWAYKIT_CHAT=1` + an `AWAYKIT_PROJECTS` allow-list. See [docs/LIVE-CHAT.md](docs/LIVE-CHAT.md).
+- ✅ **v0.10** — **mission control**: the phone shows what actually happened, not just that something ran — the agent's **final response** on every turn-end card, permanent **tool-result lines** ("▶ npm test → 5 passing", "✏️ Edited daemon.js"), a model·project·state header — and **↩ Continue**: adopt a session that finished on your laptop as a phone chat with its full context (`--resume`).
 - ⏭️ Next: v1.0 — audited security model, reproducible builds; more chat drivers + opt-in PTY attach.
 
 Star/watch the repo to follow along.
@@ -178,6 +179,7 @@ Star/watch the repo to follow along.
 - [x] v0.7 — integrity vs an active on-path attacker: optional self-signed HTTPS on LAN (`AWAYKIT_TLS`)
 - [x] v0.8 — agent-agnostic adapters (Codex, Cursor, Gemini CLI, OpenCode; `awaykit-ask` for anything else)
 - [x] v0.9 — live chat: start & drive agent sessions from the phone (stream, steer, approve inline, interrupt)
+- [x] v0.10 — mission control: final responses + tool results on the phone; ↩ Continue a finished laptop session
 - [ ] v1.0 — audited security model, reproducible builds; more chat drivers + opt-in PTY attach
 
 ## Contributing

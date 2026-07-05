@@ -16,6 +16,17 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"C:/path/to/awaykit/daemon/src/hook.js\""
+          }
+        ]
+      }
+    ],
     "Notification": [
       {
         "matcher": ".*",

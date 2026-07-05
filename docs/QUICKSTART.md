@@ -98,6 +98,10 @@ forward slashes to avoid JSON escaping pain:
         ]
       }
     ],
+    "PostToolUse": [
+      { "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch", "hooks": [
+        { "type": "command", "command": "node \"C:/path/to/awaykit/daemon/src/hook.js\"" } ] }
+    ],
     "Notification": [
       { "matcher": ".*", "hooks": [
         { "type": "command", "command": "node \"C:/path/to/awaykit/daemon/src/hook.js\"" } ] }
@@ -115,10 +119,15 @@ forward slashes to avoid JSON escaping pain:
   from your phone while you're out. If it times out, Claude Code falls back to its
   normal prompt.
 - **`Stop`** is where the chat steering lives: when the agent finishes a turn,
-  your phone gets a **"what next?"** card for 45 s. Type an instruction and tap
-  **Continue ▶** — the agent keeps going with it. Ignore it (or tap **Let it
-  stop**) and the turn ends normally. The `timeout: 120` gives the hook room to
-  wait out the card.
+  your phone gets a **"what next?"** card for 45 s — and (v0.10) the card shows
+  the agent's **final response**, so you know what just happened before you
+  answer. Type an instruction and tap **Continue ▶** — the agent keeps going
+  with it. Ignore it (or tap **Let it stop**) and the turn ends normally. The
+  `timeout: 120` gives the hook room to wait out the card. If chat mode is on
+  and the dir is allow-listed, a finished turn also becomes **↩ Continue**-able
+  from the phone's chat tab (`--resume` keeps its full context).
+- **`PostToolUse`** (v0.10) reports what each tool **did** — permanent lines
+  like *"▶ Run: npm test → 5 passing"* in the phone's Activity/chat log.
 - **`Notification`** is optional — it feeds the phone's *Activity* log.
 
 Restart Claude Code (or run `/hooks`) so it picks up the new hooks.

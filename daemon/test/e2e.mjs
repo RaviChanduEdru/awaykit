@@ -9,7 +9,7 @@
  */
 import { spawn } from "node:child_process";
 import http from "node:http";
-import { readFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -246,6 +246,30 @@ try {
   const subRun = runHook({ hook_event_name: "SubagentStop", session_id: "sessH" });
   ok(await until(() => got.some((p) => p.type === "notify" && /subagent/i.test(p.text || "")), 3000), "SubagentStop arrives as a feed notification, not a card");
   ok((await subRun).code === 0, "SubagentStop hook exits cleanly");
+
+  // ---- mission control (v0.10): see what the agent SAID and what tools DID ----
+
+  // activity kind → permanent agent.act line
+  await req("POST", "/hook", { body: { kind: "activity", icon: "▶", text: "Run: npm test → 5 passing", sessionId: "sess1" } });
+  ok(await until(() => got.some((p) => p.type === "agent.act" && p.text.includes("5 passing")), 2000), "a tool result becomes a permanent agent.act line");
+
+  // real hook.js PostToolUse: tool_response → "what it did" line
+  const postRun = runHook({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm test" }, tool_response: { stdout: "all 68 checks passed" }, session_id: "sessH" });
+  ok(await until(() => got.some((p) => p.type === "agent.act" && p.text.includes("npm test") && p.text.includes("all 68 checks passed")), 3000), "hook.js PostToolUse reports the command AND its output");
+  ok((await postRun).code === 0, "PostToolUse hook exits cleanly");
+
+  // real hook.js Stop with a transcript: the agent's FINAL RESPONSE reaches the phone
+  const tpath = join(HOME, "fake-transcript.jsonl");
+  writeFileSync(tpath, [
+    JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: "add the tests" }] } }),
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Done — I added 4 audit-log tests and they all pass." }] } }),
+  ].join("\n") + "\n");
+  const stopRun2 = runHook({ hook_event_name: "Stop", session_id: "sessT", cwd: "/tmp", transcript_path: tpath });
+  ok(await until(() => got.some((p) => p.type === "agent.msg" && p.text.includes("4 audit-log tests")), 3000), "the agent's final response is broadcast to the phone (agent.msg)");
+  ok(await until(() => got.some((p) => p.type === "prompt" && p.kind === "stop" && (p.detail || "").includes("4 audit-log tests")), 3000), "the turn-end card carries the final response, so 'what next?' is informed");
+  const spT = got.filter((p) => p.type === "prompt" && p.kind === "stop").pop();
+  await req("POST", "/respond", { headers: { cookie }, body: { c: seal(sk, { promptId: spT.promptId, choice: "stop" }) } });
+  ok((await stopRun2).code === 0, "transcript-reading Stop hook exits cleanly");
 
   // ---- push notifications (v0.6): VAPID delivery, subscription, closed-app wake ----
   ok(got.some((p) => p.type === "snapshot" && typeof p.vapid === "string" && p.vapid.length > 80), "snapshot carries the daemon's VAPID public key for the client to subscribe with");

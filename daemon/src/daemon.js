@@ -175,6 +175,24 @@ const chat = CHAT_ENABLED ? createSessionManager({
   daemonUrl: `${SCHEME}://127.0.0.1:${PORT}`,
 }) : null;
 
+/**
+ * Recently-finished turns from EXTERNAL sessions (e.g. your VS Code one) in
+ * allow-listed dirs. The phone can "↩ Continue" any of them as a chat session —
+ * `--resume` keeps the full context, so a finished laptop task picks up on the
+ * phone with no 45-second window. (Resuming forks the conversation: phone turns
+ * won't appear back in the original VS Code pane.)
+ */
+let recentTurns = [];
+const normPath = (p) => { const r = resolvePath(String(p || "")); return process.platform === "win32" ? r.toLowerCase() : r; };
+function recordRecentTurn(ev) {
+  if (!chat || !ev.sessionId || !ev.cwd) return;
+  const dir = chat.projects().find((p) => normPath(p) === normPath(ev.cwd));
+  if (!dir) return; // only allow-listed projects are adoptable
+  recentTurns = recentTurns.filter((t) => t.agentSid !== ev.sessionId);
+  recentTurns.unshift({ agentSid: ev.sessionId, cwd: dir, ts: Date.now(), snippet: String(ev.lastResponse || "").slice(0, 120) });
+  recentTurns = recentTurns.slice(0, 5);
+}
+
 /** Everything a freshly-connected phone needs to render the current state. */
 function snapshotPayload() {
   return {
@@ -184,6 +202,7 @@ function snapshotPayload() {
     chat: CHAT_ENABLED,
     projects: chat ? chat.projects() : [],
     sessions: chat ? chat.snapshot() : [],
+    recentTurns: chat ? recentTurns : [],
   };
 }
 
@@ -330,6 +349,21 @@ const requestHandler = async (req, res) => {
         return;
       }
 
+      // --- what a tool DID (PostToolUse result line) — a permanent record ---
+      if (ev.kind === "activity") {
+        broadcast({ type: "agent.act", sessionId: ev.sessionId || "", icon: ev.icon || "🔧", text: String(ev.text || "").slice(0, 300) });
+        json(res, 200, { ok: true });
+        return;
+      }
+
+      // Turn-end bookkeeping happens even if no phone is connected right now:
+      // the final response is broadcast (no-op when nobody listens) and the turn
+      // becomes "↩ Continue"-able from the phone later.
+      if (ev.kind === "stop") {
+        recordRecentTurn(ev);
+        if (ev.lastResponse) broadcast({ type: "agent.msg", sessionId: ev.sessionId || "", cwd: ev.cwd || "", text: String(ev.lastResponse).slice(0, 1500) });
+      }
+
       // No paired phone connected AND no push subscription => behave like plain
       // Claude Code (no interception). A registered push subscription means
       // "notify me even when the app is closed", so we still intercept and wake
@@ -346,7 +380,9 @@ const requestHandler = async (req, res) => {
         summary: isStop
           ? (ev.stopActive ? "Agent finished again — keep going?" : "Agent finished its turn — what next?")
           : (ev.summary || "Agent needs your approval"),
-        detail: ev.detail || "",
+        // Turn-end cards carry the agent's final message, so "what next?" is
+        // answerable from the phone without guessing what just happened.
+        detail: isStop ? String(ev.lastResponse || "").slice(0, 1500) : (ev.detail || ""),
         sessionId: ev.sessionId || "",
         cwd: ev.cwd || "",
         ts: Date.now(),
@@ -414,7 +450,7 @@ async function printPairing() {
     ? `${RELAY}/#k=${b64urlEncode(KEY)}&via=relay`
     : `${SCHEME}://${host.ip}:${PORT}/#k=${b64urlEncode(KEY)}`;
 
-  console.log(`\n  awaykit daemon — v0.9 (paired · encrypted · steering · relay · push${TLS ? " · TLS" : ""}${CHAT_ENABLED ? " · chat" : ""})`);
+  console.log(`\n  awaykit daemon — v0.10 (paired · encrypted · steering · relay · push${TLS ? " · TLS" : ""}${CHAT_ENABLED ? " · chat" : ""})`);
   console.log(`  ────────────────────────────────────────────────────────────`);
   console.log(`  local:   ${SCHEME}://127.0.0.1:${PORT}`);
   for (const c of candidateHosts(ifaces)) {
