@@ -22,6 +22,8 @@ jobs:
           node --check daemon/src/endpoint.js
           node --check daemon/src/relay-client.js
           node --check daemon/src/ctl.js
+          node --check daemon/src/agent-core.js
+          for f in daemon/src/adapters/*.js; do node --check "$f"; done
           node --check relay/server.js
 
       - name: End-to-end (pairing + encryption + steering + relay)
