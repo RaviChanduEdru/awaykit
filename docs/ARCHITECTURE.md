@@ -1,111 +1,147 @@
 # awaykit architecture
 
+How awaykit is *actually* built as of **v0.10**. (Earlier drafts of this file
+described an aspirational TypeScript/React-Native/WebRTC design; the shipped
+system is simpler and is what's documented here.)
+
+**One line:** a zero-framework Node.js daemon on your laptop holds an
+end-to-end-encrypted channel to a phone web client, gates your coding agent's
+tool calls through it, and — opt-in — lets the phone start and drive whole agent
+sessions. Four runtime dependencies (`tweetnacl`, `qrcode`, `web-push`,
+`selfsigned`); everything else is the Node standard library.
+
 ## Components
 
-### 1. Daemon (`daemon/`) — TypeScript / Node.js
+### 1. Daemon (`daemon/`) — Node.js (ESM), no web framework
 
-Runs on the laptop. Responsibilities:
+Runs on the laptop; a bare `node:http`/`https` server. Modules:
 
-- **Agent adapters** — pluggable integrations per coding agent:
-  - `claude-code`: uses Claude Code hooks (`PreToolUse`, `Notification`, `Stop`)
-    to detect permission prompts and session state — structured, reliable.
-  - `pty` (fallback): wraps any CLI agent in a pseudo-terminal and streams
-    raw output; prompt detection via patterns.
-- **Session manager** — tracks running sessions, buffers output, exposes
-  the control protocol.
-- **Crypto layer** — key storage, pairing, secretstream encryption.
-- **Transport** — direct (VPN/LAN) WebSocket server + optional relay client.
+| File | Responsibility |
+|---|---|
+| `src/daemon.js` | HTTP(S) server + all routes; owns the pending-prompt map, the connected-client set, and session cookies; wires the pieces together. |
+| `src/crypto.js` | NaCl secretbox seal/open, the pairing proof, and the ephemeral X25519 key agreement (per-session forward secrecy). Also `roomIdFromKey` for the relay. |
+| `src/sessions.js` | **Live-chat engine** — spawns coding-agent processes, speaks their headless `stream-json` protocol, keeps a bounded transcript ring, emits neutral events. No HTTP/crypto (callbacks in, events out) → independently testable. |
+| `src/agent-core.js` | Shared adapter runtime: read a hook event, call the daemon, return the phone's decision. Used by all agent adapters. |
+| `src/hook.js` | The Claude Code adapter (also `src/adapters/*` for Codex/Cursor/Gemini/OpenCode). Maps hook events ⇄ awaykit and prints the agent's expected decision. |
+| `src/describe.js` | Turns a tool call into a human summary + detail (the Bash command, a Write's contents, an Edit's ± diff). |
+| `src/relay-client.js` | Outbound link to a zero-knowledge relay so remote phones reach the daemon with no inbound ports. |
+| `src/push.js` | VAPID keys + Web Push (RFC 8291) so the phone is woken with the app closed. |
+| `src/tls.js` | Optional self-signed HTTPS on the LAN (`AWAYKIT_TLS`). |
+| `src/endpoint.js` | Advertises the daemon's loopback URL/scheme so `hook.js`/`ctl.js` reach it. |
+| `src/ctl.js` | Lifecycle CLI: `start` / `stop` / `restart` / `status` over loopback. |
+| `src/audit.js` | Append-only local log of every decision and chat action. |
 
-### 2. Mobile app (`app/`) — React Native (Expo)
+### 2. Phone client (`daemon/public/`) — vanilla HTML/JS PWA
 
-- Session list & live output stream (virtualized log view)
-- **Approval cards**: agent prompt rendered as a structured card with
-  Approve / Deny / Reply actions
-- Push notifications (FCM/APNs) triggered by relay wake-ups — payload is
-  ciphertext; decrypted on-device before display
-- QR scanner for pairing
+One framework-free `index.html` (+ `sw.js`, manifest, icons). Does the NaCl
+crypto in-browser, consumes the sealed SSE stream, and renders two coexisting
+modes the user switches between:
 
-### 3. Relay (`relay/`) — optional, self-hostable
+- **🛡️ Approvals (Gate mode)** — approval cards (Approve / Deny+note), the
+  turn-end "what next?" card (now carrying the agent's final response), and the
+  Activity feed of what tools did.
+- **💬 Chat mode** — sessions row, streaming conversation, composer, inline
+  approval cards, and the ↩ Continue picker.
 
-- WebRTC signaling + message queue for offline phones
-- Push notification fan-out
-- Zero knowledge: stores/forwards ciphertext blobs only
+The native `app/` is still a placeholder; the PWA carries everything today.
 
-## Wire protocol (draft)
+### 3. Relay (`relay/`) — optional, self-hostable, zero-knowledge
 
-All messages are encrypted envelopes. Plaintext schema (JSON, versioned):
+A tiny dependency-free Node server. Rooms are keyed by `hash(K)`; it forwards
+sealed blobs it cannot read (queue + TTL for offline phones) and serves the app
+shell. See [relay/README.md](../relay/README.md).
+
+## Two ways the phone interacts (they coexist)
+
+### Gate mode — intercept an agent you started yourself
+```
+Claude Code (your VS Code session)          awaykit daemon                 phone
+──────────────────────────────────          ──────────────                 ─────
+PreToolUse hook ──POST /hook (loopback)──▶  hold request open
+  (hook.js)                                 broadcast ──sealed SSE──▶  approval card
+                                                                       tap Approve/Deny(+note)
+                ◀── allow/deny decision ──  resolve  ◀──POST /respond (sealed)──┘
+PostToolUse ────POST /hook──▶ "▶ Run: … → output"  ──▶ Activity feed (agent.act)
+Stop ───────────POST /hook──▶ final response + "what next?" card ──▶ (agent.msg)
+```
+
+### Chat mode — the phone starts & drives the session (opt-in)
+```
+phone ──sealed {t:"chat", op:"start|send|interrupt|kill"}──▶ /chat (or relay)
+                                                              │
+                                    sessions.js spawns:  claude -p --input-format
+                                    stream-json --output-format stream-json …
+                                    (with --settings injecting awaykit's own hooks,
+                                     AWAYKIT_MANAGED=1 in the child env)
+     ◀── chat.delta (token stream) / chat.tool / chat.turn / session.state ──┘
+     inline approval cards still gate every tool call via the same hook path
+```
+`--resume <id>` powers **↩ Continue**: adopt a conversation that finished
+elsewhere (e.g. your VS Code session) with its full context. Off unless
+`AWAYKIT_CHAT=1` **and** an `AWAYKIT_PROJECTS` allow-list; sessions run
+`--permission-mode default` (never skip permissions).
+
+## Security model (summary)
+
+- **Pairing:** one key `K`, created on first run, delivered to the phone only via
+  the QR's URL *fragment* (never sent to a server).
+- **Channel:** every phone⇄daemon message is NaCl-secretbox sealed. `K` only
+  *authenticates* the handshake; traffic uses a per-session ephemeral X25519 key
+  → **forward secrecy** (leaking `K` can't decrypt past sessions).
+- **Auth:** `/events`, `/respond`, `/chat`, `/push-sub` require a session cookie
+  issued only after the phone proves it holds `K`. `/hook`, `/health`,
+  `/shutdown`, `/audit` are loopback-only.
+- **Integrity:** plain-HTTP LAN doesn't stop an active on-path attacker; a VPN,
+  the relay (HTTPS), or `AWAYKIT_TLS` closes that gap.
+- **Everything is audited** to an append-only local log.
+
+Full threat model + the live-chat specifics: [SECURITY.md](SECURITY.md).
+
+## Wire protocol (representative)
+
+All frames are sealed; these are the plaintext shapes.
 
 ```jsonc
-{ "v": 1, "type": "prompt.request",   // daemon → phone
-  "sessionId": "s_abc", "promptId": "p_1",
-  "kind": "tool_permission",
-  "summary": "Run: npm install express",
-  "detail": "...", "options": ["approve", "deny"] }
+// daemon → phone (sealed SSE `event: m`)
+{ "type": "snapshot", "pending": [...], "chat": true, "projects": [...],
+  "sessions": [...], "recentTurns": [...], "vapid": "..." }
+{ "type": "prompt", "promptId": "...", "kind": "permission|stop",
+  "tool": "Bash", "summary": "Run: npm test", "detail": "...", "sessionId": "..." }
+{ "type": "resolved",     "promptId": "...", "choice": "approve|deny|continue|stop|expired" }
+{ "type": "chat.delta",   "sid": "...", "text": "…" }         // token stream
+{ "type": "chat.turn",    "sid": "...", "costUsd": 0, "ms": 0 }
+{ "type": "session.state","sid": "...", "state": "running|idle|dead",
+  "model": "sonnet", "cwd": "...", "agentSid": "..." }
+{ "type": "agent.msg",    "sessionId": "...", "text": "final response…" }
+{ "type": "agent.act",    "sessionId": "...", "icon": "▶", "text": "Run: … → output" }
 
-{ "v": 1, "type": "prompt.response",  // phone → daemon
-  "sessionId": "s_abc", "promptId": "p_1",
-  "choice": "approve" }
-
-{ "v": 1, "type": "session.output",   // daemon → phone (streamed, chunked)
-  "sessionId": "s_abc", "seq": 4821, "data": "..." }
-
-{ "v": 1, "type": "session.kill",     // phone → daemon
-  "sessionId": "s_abc" }
+// phone → daemon (sealed)
+{ "c": "<sealed { promptId, choice, note }>" }                    // POST /respond
+{ "c": "<sealed { t:'chat', op:'start', projectDir, resumeId? }>" } // POST /chat
 ```
 
 ## Repo layout
 
 ```
 awaykit/
-├── daemon/            # laptop-side daemon (Node)
-│   ├── src/
-│   │   ├── daemon.js  # HTTP server: /hook, /events (SSE), /respond
-│   │   └── hook.js    # Claude Code hook shim (PreToolUse/Notification/Stop)
-│   └── public/
-│       └── index.html # mobile web client (M0 stand-in for the app)
-├── app/               # native mobile app (React Native / Expo) — later
-├── relay/             # optional ciphertext relay — later
-├── examples/          # ready-to-paste config (Claude Code hooks)
-├── docs/              # architecture, security, quickstart
-└── .github/           # CI
+├── daemon/
+│   ├── src/            # daemon.js, sessions.js, agent-core.js, hook.js,
+│   │   ├── adapters/   #   crypto.js, relay-client.js, push.js, tls.js, ctl.js …
+│   │   └── …           # per-agent adapters (codex/cursor/gemini/opencode/ask)
+│   ├── public/         # index.html (phone PWA) + sw.js, manifest, icons
+│   └── test/           # e2e.mjs, chat.mjs, tls.mjs, adapters.mjs, fake-agent.mjs
+├── relay/              # zero-knowledge ciphertext relay (server.js)
+├── app/                # native app placeholder (PWA carries it today)
+├── examples/           # ready-to-paste Claude Code hook config
+├── docs/               # this file, SECURITY, QUICKSTART, LIVE-CHAT, REMOTE
+└── .github/            # CI (runs the full test suite)
 ```
 
-## Milestone 0 (✅ built)
+## Testing
 
-The smallest thing that proves the idea end-to-end — implemented in
-[`daemon/`](../daemon/) with **zero dependencies** (pure Node). See
-[QUICKSTART.md](QUICKSTART.md) to run it.
-
+`npm test` runs four hermetic suites (**123 checks**, no network, no API cost):
+`e2e.mjs` (crypto, pairing, gate loop, steering, push, mission-control lines),
+`chat.mjs` (live-chat loop + adopt, via a scripted `fake-agent.mjs` speaking
+stream-json), `tls.mjs`, and `adapters.mjs`. The manual `spike-stream.mjs`
+probes the real `claude` CLI and is **not** in CI (it spends real API calls).
 ```
-Claude Code                 awaykit daemon (Node)              phone browser
-───────────                 ─────────────────────              ─────────────
-PreToolUse hook  ──POST /hook──▶  hold request open
-(hook.js shim)                    broadcast ──SSE /events──▶  approval card
-                                                              tap Approve/Deny
-                 ◀── permission ── resolve  ◀──POST /respond──┘
-                    decision (allow/deny)
-```
-
-What each piece does:
-
-1. **`hook.js`** — a Claude Code `PreToolUse`/`Notification`/`Stop` hook shim. On a
-   `PreToolUse` event it `POST`s a plain-English summary of the tool call to the
-   daemon and blocks, then prints the phone's decision back as
-   `hookSpecificOutput.permissionDecision` (`allow`/`deny`). Fail-safe: if the
-   daemon is down it exits 0 with no output, so Claude Code just prompts normally.
-2. **`daemon.js`** — HTTP server. `POST /hook` holds the agent blocked; `GET
-   /events` is a Server-Sent-Events stream to the phone; `POST /respond` carries
-   the tap back and unblocks the hook. Serves the web client at `/`.
-3. **Web client** (`public/index.html`) — mobile page: live approval cards +
-   activity feed. Stands in for the native app until later milestones.
-
-**Design note — connection is the switch.** If no phone is subscribed to
-`/events`, `POST /hook` returns "no decision" immediately, so Claude Code uses its
-normal on-laptop permission flow. Opening the phone page is the signal *"I'm away,
-route approvals to me."* The `PreToolUse` matcher is scoped to mutating/executing
-tools (`Bash|Write|Edit|…`) so reads and greps are never intercepted.
-
-**Not yet (next milestones):** no crypto, no auth, no pairing, no relay/push,
-LAN only. The internal daemon↔phone protocol above is deliberately simple so the
-transport can be swapped for the encrypted envelope schema without touching the
-hook logic. Harden outward from here.
