@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0b0f17" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
   <title>awaykit</title>
   <style>
     :root {
@@ -116,6 +118,7 @@
   <div id="sheet" class="sheet">
     <div class="sheet-box">
       <div class="sheet-title">Connection</div>
+      <button id="btnNotify" class="sheet-btn">🔔&nbsp;&nbsp;Enable notifications</button>
       <button id="btnReconnect" class="sheet-btn">🔄&nbsp;&nbsp;Reconnect now</button>
       <button id="btnDisconnect" class="sheet-btn">⏸&nbsp;&nbsp;Disconnect</button>
       <button id="btnUnpair" class="sheet-btn danger">🚫&nbsp;&nbsp;Unpair this device</button>
@@ -164,6 +167,7 @@
     }
     let key = loadKey();          // long-term pairing key (authenticates handshake)
     let sessionKey = null;        // per-connection ephemeral key (encrypts the channel)
+    let vapidKey = null;          // daemon's VAPID public key (arrives in the snapshot)
     // Relay mode: this page is served by a zero-knowledge relay; traffic flows as
     // sealed blobs via /push + /pull. Room id = hash(K) — same derivation as the
     // daemon; the relay can't recover K from it.
@@ -184,6 +188,7 @@
     const statusPill=document.getElementById("statusPill"), sheet=document.getElementById("sheet");
     const btnReconnect=document.getElementById("btnReconnect"), btnDisconnect=document.getElementById("btnDisconnect");
     const btnUnpair=document.getElementById("btnUnpair"), btnCancel=document.getElementById("btnCancel");
+    const btnNotify=document.getElementById("btnNotify");
     const cards = new Map();
 
     function showGate(title, msg){ appEl.style.display="none"; gateEl.style.display="flex"; if(title)gateTitle.textContent=title; if(msg)gateMsg.textContent=msg; setStatus(false,"not paired"); }
@@ -253,7 +258,7 @@
 
     function dispatch(p){
       switch(p.type){
-        case "snapshot": cards.forEach((_,id)=>removeCard(id)); (p.pending||[]).forEach(addCard); break;
+        case "snapshot": cards.forEach((_,id)=>removeCard(id)); (p.pending||[]).forEach(addCard); if(p.vapid){ vapidKey=p.vapid; maybePush(); } break;
         case "prompt": addCard(p); if(navigator.vibrate) navigator.vibrate(80); break;
         case "resolved":
           if(p.choice==="expired" && cards.has(p.promptId)) pushFeed("⌛","Turn ended — no answer in time");
@@ -344,6 +349,10 @@
     function openSheet(){
       btnDisconnect.style.display = paused ? "none" : "block";
       btnReconnect.innerHTML = paused ? "🔄&nbsp;&nbsp;Reconnect" : "🔄&nbsp;&nbsp;Reconnect now";
+      const granted = ("Notification" in window) && Notification.permission === "granted";
+      btnNotify.innerHTML = !pushSupported() ? "🔔&nbsp;&nbsp;Notifications need HTTPS"
+        : granted ? "🔔&nbsp;&nbsp;Notifications on · re-check"
+        : "🔔&nbsp;&nbsp;Enable notifications";
       sheet.classList.add("open");
     }
     function closeSheet(){ sheet.classList.remove("open"); }
@@ -358,6 +367,34 @@
       closeStream(); paused=true; localStorage.removeItem("awaykit_key"); localStorage.removeItem("awaykit_relay"); key=null; closeSheet();
       showGate("Device unpaired", "Scan the QR code from your laptop's terminal to pair this device again.");
     };
+
+    // ---------- Web Push (v0.6): buzz the phone even when the app is closed ----------
+    // Requires a secure context (HTTPS), so this only lights up over the relay or
+    // an HTTPS tunnel — not plain-HTTP LAN. The subscription is sent to the daemon
+    // over the same encrypted channel; the push payload is E2E-encrypted to this
+    // device (RFC 8291), so no relay or push service can read it.
+    function pushSupported(){ return window.isSecureContext && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window; }
+    function urlB64ToU8(b64){ const pad="=".repeat((4-b64.length%4)%4); const s=(b64+pad).replace(/-/g,"+").replace(/_/g,"/"); const raw=atob(s); const out=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i); return out; }
+    async function sendSub(subJSON){ const sealed=seal(sessionKey,{t:"push-sub",sub:subJSON}); if(viaRelay) await relayPush(sealed); else await fetch("/push-sub",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({c:sealed})}); }
+    async function subscribePush(){
+      const reg=await navigator.serviceWorker.register("/sw.js");
+      await navigator.serviceWorker.ready;
+      let sub=await reg.pushManager.getSubscription();
+      if(!sub) sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlB64ToU8(vapidKey)});
+      await sendSub(sub.toJSON());
+      return sub;
+    }
+    async function maybePush(){ if(!pushSupported()||!vapidKey||!sessionKey) return; if(Notification.permission==="granted"){ try{ await subscribePush(); }catch{} } }
+    async function enableNotifications(){
+      if(!pushSupported()){ alert("Push needs an HTTPS connection (the relay or a tunnel) in a supported browser.\n\nOn iPhone: open awaykit, tap Share → Add to Home Screen, launch it from there, then enable notifications."); return; }
+      if(!vapidKey||!sessionKey){ alert("Still connecting — try again in a second."); return; }
+      let perm=Notification.permission; if(perm==="default") perm=await Notification.requestPermission();
+      if(perm!=="granted"){ alert("Notifications are blocked. Turn them on in your browser's site settings for this page."); return; }
+      try{ await subscribePush(); pushFeed("🔔","Notifications on — you'll be buzzed even with the app closed"); }
+      catch(e){ alert("Couldn't enable notifications: "+((e&&e.message)||e)); }
+    }
+    if(navigator.serviceWorker){ navigator.serviceWorker.addEventListener("message",(e)=>{ if(e.data&&e.data.type==="awaykit-resubscribe") subscribePush().catch(()=>{}); }); }
+    btnNotify.onclick = () => { closeSheet(); enableNotifications(); };
 
     start();
   </script>

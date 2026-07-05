@@ -33,7 +33,7 @@ const MAX_SESSIONS = 8;        // sanity cap on concurrent remote phones
  * @param {()=>Array} opts.snapshot         current pending prompts (public shape)
  * @param {(msg:string)=>void} [opts.log]
  */
-export function startRelayClient({ relayURL, key, registerClient, unregisterClient, resolvePrompt, snapshot, log = console.log }) {
+export function startRelayClient({ relayURL, key, registerClient, unregisterClient, resolvePrompt, snapshot, vapidKey = "", onPhoneMessage = () => {}, log = console.log }) {
   const base = relayURL.replace(/\/+$/, "");
   const room = roomIdFromKey(key);
   const sessions = new Set(); // { sk, lastSeen, sendSealed }
@@ -69,7 +69,7 @@ export function startRelayClient({ relayURL, key, registerClient, unregisterClie
         const oldest = [...sessions].sort((a, b) => a.lastSeen - b.lastSeen)[0];
         drop(oldest);
       }
-      client.sendSealed({ type: "snapshot", pending: snapshot() });
+      client.sendSealed({ type: "snapshot", pending: snapshot(), vapid: vapidKey });
       log(`[awaykit] remote phone connected via relay (${sessions.size} remote session${sessions.size === 1 ? "" : "s"})`);
       return;
     }
@@ -81,8 +81,9 @@ export function startRelayClient({ relayURL, key, registerClient, unregisterClie
       c.lastSeen = Date.now();
       if (msg.promptId && typeof msg.choice === "string") {
         resolvePrompt(msg.promptId, msg.choice, typeof msg.note === "string" ? msg.note : "");
+      } else {
+        onPhoneMessage(msg); // push-sub registration, etc. (ping just refreshed lastSeen)
       }
-      // ping (or anything else) just refreshes lastSeen
       return;
     }
     // Undecipherable: someone else's blob or a stale session — ignore silently.

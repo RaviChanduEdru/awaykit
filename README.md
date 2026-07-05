@@ -61,7 +61,7 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the threat model.
 - **`relay/`** — optional, self-hostable; forwards ciphertext + wakes your phone
   with push notifications. Never sees plaintext.
 
-## Try it now (v0.5 — paired · encrypted · steering · works anywhere)
+## Try it now (v0.6 — paired · encrypted · steering · push · works anywhere)
 
 **Approve — and steer — your Claude Code sessions from your phone** on an
 end-to-end encrypted channel that only *your* paired phone can use — on your
@@ -90,6 +90,12 @@ Deploy the relay free in one click:
 > and leaking the long-term key can't decrypt past sessions. On plain-HTTP LAN it
 > doesn't stop an *active* on-path attacker; running over a VPN (Tailscale/
 > WireGuard) closes that gap. Honest threat model: [SECURITY.md](docs/SECURITY.md).
+
+**🔔 Push notifications.** Over an HTTPS connection (the relay or a tunnel), open
+the app, tap the status pill → **Enable notifications**, and your phone buzzes the
+moment the agent needs you — even with the app closed. The daemon sends the push
+outbound itself; the payload is end-to-end encrypted to your device (RFC 8291), so
+the relay and the push service only ever forward ciphertext.
 
 ## Managing the daemon
 
@@ -122,7 +128,8 @@ phone automatically, no re-scan needed (the pairing key persists).
 - ✅ **v0.3** — remote access: use it from any network over a VPN; auto-detects the VPN address for pairing.
 - ✅ **v0.4** — chat steering: Deny carries your typed note to Claude as feedback; "turn finished — what next?" cards keep the agent going with your instructions.
 - ✅ **v0.5** — zero-knowledge relay: remote access from anywhere with **no VPN and no open ports** — a self-hostable relay forwards sealed blobs it cannot read.
-- ⏭️ Next: push notifications; integrity vs active MITM; agent-agnostic adapters.
+- ✅ **v0.6** — push notifications: your phone buzzes even when the app is closed. Works over HTTPS (relay/tunnel); the payload is E2E-encrypted (RFC 8291), so the relay and push service see only ciphertext.
+- ⏭️ Next: integrity vs an active on-path attacker (HTTPS app shell); agent-agnostic adapters.
 
 Star/watch the repo to follow along.
 
@@ -134,8 +141,9 @@ Star/watch the repo to follow along.
 - [x] v0.3 — remote access from any network over a VPN (Tailscale/WireGuard)
 - [x] v0.4 — chat steering (deny with instructions; continue-on-stop with your next prompt)
 - [x] v0.5 — zero-knowledge relay (remote without a VPN, ciphertext only)
-- [ ] v0.6 — push notifications; integrity vs active MITM (HTTPS / native app)
-- [ ] v0.7 — agent-agnostic adapters (Codex, Cursor CLI, OpenCode)
+- [x] v0.6 — push notifications (wake the phone even with the app closed, over HTTPS)
+- [ ] v0.7 — integrity vs an active on-path attacker (HTTPS app shell / native app)
+- [ ] v0.8 — agent-agnostic adapters (Codex, Cursor CLI, OpenCode)
 - [ ] v1.0 — audited security model, reproducible builds
 
 ## Contributing

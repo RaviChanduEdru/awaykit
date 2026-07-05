@@ -17,6 +17,7 @@ jobs:
           node --check daemon/src/daemon.js
           node --check daemon/src/hook.js
           node --check daemon/src/crypto.js
+          node --check daemon/src/push.js
           node --check daemon/src/relay-client.js
           node --check daemon/src/ctl.js
           node --check relay/server.js

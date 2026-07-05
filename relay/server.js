@@ -33,6 +33,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || process.env.AWAYKIT_RELAY_PORT || 4600);
 const HOST = process.env.HOST || "0.0.0.0";
 
+/** PWA + service-worker assets, served from the same public dir as the app shell. */
+const STATIC = {
+  "/sw.js": ["sw.js", "application/javascript; charset=utf-8", "no-cache"],
+  "/manifest.webmanifest": ["manifest.webmanifest", "application/manifest+json", "no-cache"],
+  "/icon-192.png": ["icon-192.png", "image/png", "public, max-age=86400"],
+  "/icon-512.png": ["icon-512.png", "image/png", "public, max-age=86400"],
+};
+
 const ROOM_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const MAX_BLOB = 64 * 1024;      // one sealed message
 const QUEUE_CAP = 200;           // per room per direction
@@ -117,6 +125,14 @@ const server = createServer(async (req, res) => {
       if (!dir) { res.writeHead(404); res.end(); return; }
       res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "public, max-age=86400" });
       res.end(await readFile(join(dir, "vendor", "nacl.min.js")));
+      return;
+    }
+    if (req.method === "GET" && STATIC[pathname]) {
+      const dir = await publicDir();
+      if (!dir) { res.writeHead(404); res.end(); return; }
+      const [file, type, cache] = STATIC[pathname];
+      res.writeHead(200, { "content-type": type, "cache-control": cache });
+      res.end(await readFile(join(dir, file)));
       return;
     }
 

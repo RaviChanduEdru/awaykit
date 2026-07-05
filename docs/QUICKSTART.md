@@ -1,4 +1,4 @@
-# Quickstart — v0.3 (paired · encrypted · forward-secret · remote-ready)
+# Quickstart — v0.6 (paired · encrypted · forward-secret · push · remote-ready)
 
 Approve your Claude Code tool calls from your phone —
 **end-to-end encrypted**, only *your* paired phone can connect, and (over a VPN)
@@ -63,6 +63,14 @@ need to scan again.
 > the address for the QR), or the **zero-knowledge relay** (`AWAYKIT_RELAY=…`) —
 > no VPN, no open ports, and the relay only ever sees ciphertext. See
 > **[REMOTE.md](REMOTE.md)**.
+
+> **🔔 Get notified with the app closed.** Over an **HTTPS** connection (the relay
+> or an HTTPS tunnel — not plain-HTTP LAN), tap the status pill → **Enable
+> notifications**. Your phone then buzzes the moment the agent needs you, even when
+> awaykit isn't open. On iPhone, first add awaykit to your Home Screen (Share → Add
+> to Home Screen) and launch it from there, then enable notifications. The push
+> payload is end-to-end encrypted to your device — the relay and push service only
+> forward ciphertext.
 
 ## 3. Wire the hook into Claude Code
 

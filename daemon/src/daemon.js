@@ -42,9 +42,17 @@ import { loadOrCreateKey, regenerateKey, keyPath, seal, open, openProof, newEphe
 import { pickPairingHost, candidateHosts } from "./net.js";
 import { appendAudit, readAudit } from "./audit.js";
 import { startRelayClient } from "./relay-client.js";
+import { initPush, vapidPublicKey, subCount, addSub, removeSub, sendPush } from "./push.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "public");
+/** Static assets served to the phone (app shell + PWA + service worker). */
+const STATIC = {
+  "/sw.js": ["sw.js", "application/javascript; charset=utf-8", "no-cache"],
+  "/manifest.webmanifest": ["manifest.webmanifest", "application/manifest+json", "no-cache"],
+  "/icon-192.png": ["icon-192.png", "image/png", "public, max-age=86400"],
+  "/icon-512.png": ["icon-512.png", "image/png", "public, max-age=86400"],
+};
 const PORT = Number(process.env.AWAYKIT_PORT || 4517);
 const HOST = process.env.AWAYKIT_HOST || "0.0.0.0";
 const REPAIR = process.argv.includes("--pair") || process.env.AWAYKIT_REPAIR === "1";
@@ -55,6 +63,7 @@ const PUBLIC_HOST = process.env.AWAYKIT_PUBLIC_HOST || "";
 const RELAY = (process.env.AWAYKIT_RELAY || "").replace(/\/+$/, "");
 
 const KEY = REPAIR ? regenerateKey() : loadOrCreateKey();
+const PUSH = initPush(); // VAPID keys + persisted push subscriptions (~/.awaykit)
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 /** How long a "turn finished — what next?" card waits for an answer before the
  *  agent is allowed to stop normally. Keep it under the Stop hook's timeout. */
@@ -159,11 +168,18 @@ const server = createServer(async (req, res) => {
       res.end(js);
       return;
     }
+    if (req.method === "GET" && STATIC[pathname]) {
+      const [file, type, cache] = STATIC[pathname];
+      const buf = await readFile(join(PUBLIC_DIR, file));
+      res.writeHead(200, { "content-type": type, "cache-control": cache });
+      res.end(buf);
+      return;
+    }
 
     // --- local-only endpoints ---
     if (req.method === "GET" && pathname === "/health") {
       if (!isLoopback(req)) { json(res, 403, { ok: false }); return; }
-      json(res, 200, { ok: true, pending: pending.size, clients: clients.size, sessions: sessions.size, port: PORT, uptimeSec: Math.round(process.uptime()) });
+      json(res, 200, { ok: true, pending: pending.size, clients: clients.size, sessions: sessions.size, subs: subCount(), port: PORT, uptimeSec: Math.round(process.uptime()) });
       return;
     }
 
@@ -210,7 +226,7 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive" });
       res.write(": awaykit stream open\n\n");
       const client = { sendSealed: (payload) => { res.write(`event: m\ndata: ${seal(sess.sk, payload)}\n\n`); } };
-      client.sendSealed({ type: "snapshot", pending: [...pending.values()].map(publicPrompt) });
+      client.sendSealed({ type: "snapshot", pending: [...pending.values()].map(publicPrompt), vapid: vapidPublicKey() });
       clients.add(client);
       const keepAlive = setInterval(() => { try { res.write(": ping\n\n"); } catch {} }, 25_000);
       req.on("close", () => { clearInterval(keepAlive); clients.delete(client); });
@@ -235,6 +251,19 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // --- phone registers/refreshes a Web Push subscription (sealed body) ---
+    if (req.method === "POST" && pathname === "/push-sub") {
+      const sess = sessionOf(req);
+      if (!sess) { json(res, 401, { ok: false, error: "pair first" }); return; }
+      const body = await readBody(req);
+      const msg = body && body.c ? open(sess.sk, body.c) : null;
+      if (!msg || msg.t !== "push-sub") { json(res, 400, { ok: false, error: "undecipherable" }); return; }
+      if (msg.remove && msg.endpoint) { removeSub(msg.endpoint); json(res, 200, { ok: true, removed: true }); return; }
+      const ok = addSub(msg.sub, req.headers["user-agent"] || "");
+      json(res, ok ? 200 : 400, { ok });
+      return;
+    }
+
     // --- the local Claude Code hook (loopback only) ---
     if (req.method === "POST" && pathname === "/hook") {
       if (!isLoopback(req)) { res.writeHead(403); res.end(); return; }
@@ -246,8 +275,11 @@ const server = createServer(async (req, res) => {
         return;
       }
 
-      // No paired phone connected => behave like plain Claude Code (no interception).
-      if (clients.size === 0) { json(res, 200, { ok: true, choice: null, reason: "no phone connected" }); return; }
+      // No paired phone connected AND no push subscription => behave like plain
+      // Claude Code (no interception). A registered push subscription means
+      // "notify me even when the app is closed", so we still intercept and wake
+      // the phone rather than falling back to the on-laptop prompt.
+      if (clients.size === 0 && subCount() === 0) { json(res, 200, { ok: true, choice: null, reason: "no phone connected" }); return; }
 
       // Two waitable kinds: "permission" (approve/deny a tool call) and "stop"
       // (the agent finished its turn — continue with instructions, or let it stop).
@@ -302,6 +334,14 @@ const server = createServer(async (req, res) => {
 
       broadcast({ type: "prompt", ...publicPrompt(prompt) });
       console.log(`[awaykit] → phone: ${prompt.tool} — ${prompt.summary}`);
+      // Wake a closed/backgrounded app via Web Push. Skip when a phone is already
+      // live (it gets the event over SSE) and for turn-end cards (they expire
+      // faster than a notification round-trip is useful).
+      if (!isStop && clients.size === 0 && subCount() > 0) {
+        sendPush({ title: "awaykit — approve?", body: `${prompt.tool}: ${prompt.summary}`.slice(0, 140), tag: prompt.promptId, url: "/" })
+          .then((r) => { if (r.sent) console.log(`[awaykit]   🔔 pushed to ${r.sent} device(s)${r.pruned ? `, pruned ${r.pruned}` : ""}`); })
+          .catch(() => {});
+      }
       return; // response sent later by finish() / the expiry timer
     }
 
@@ -319,7 +359,7 @@ async function printPairing() {
     ? `${RELAY}/#k=${b64urlEncode(KEY)}&via=relay`
     : `http://${host.ip}:${PORT}/#k=${b64urlEncode(KEY)}`;
 
-  console.log(`\n  awaykit daemon — v0.5 (paired · encrypted · steering · relay)`);
+  console.log(`\n  awaykit daemon — v0.6 (paired · encrypted · steering · relay · push)`);
   console.log(`  ────────────────────────────────────────────────────────────`);
   console.log(`  local:   http://127.0.0.1:${PORT}`);
   for (const c of candidateHosts(ifaces)) {
@@ -343,6 +383,9 @@ async function printPairing() {
   console.log(`  If the QR won't scan, open this exact URL on your phone:`);
   console.log(`  ${pairURL}\n`);
   console.log(`  Key stored at: ${keyPath()}   (re-pair anytime with:  npm start -- --pair)`);
+  console.log(subCount() > 0
+    ? `  Push : ${subCount()} device(s) subscribed — you'll be notified even with the app closed`
+    : `  Push : none yet — open the app over HTTPS (relay/tunnel) and tap 🔔 Enable notifications`);
   console.log(`\n  Waiting for hook events on POST /hook …\n`);
 }
 
@@ -366,8 +409,15 @@ server.listen(PORT, HOST, () => {
     startRelayClient({
       relayURL: RELAY,
       key: KEY,
+      vapidKey: vapidPublicKey(),
       registerClient: (c) => clients.add(c),
       unregisterClient: (c) => clients.delete(c),
+      // A remote phone can register its Web Push subscription over the relay too.
+      onPhoneMessage: (msg) => {
+        if (!msg || msg.t !== "push-sub") return;
+        if (msg.remove && msg.endpoint) removeSub(msg.endpoint);
+        else addSub(msg.sub, "relay");
+      },
       // Mirrors /respond's validation: per-kind allowed choices + bounded note.
       resolvePrompt: (promptId, choice, note) => {
         const entry = pending.get(promptId);

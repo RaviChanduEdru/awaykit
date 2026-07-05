@@ -247,6 +247,22 @@ try {
   ok(await until(() => got.some((p) => p.type === "notify" && /subagent/i.test(p.text || "")), 3000), "SubagentStop arrives as a feed notification, not a card");
   ok((await subRun).code === 0, "SubagentStop hook exits cleanly");
 
+  // ---- push notifications (v0.6): VAPID delivery, subscription, closed-app wake ----
+  ok(got.some((p) => p.type === "snapshot" && typeof p.vapid === "string" && p.vapid.length > 80), "snapshot carries the daemon's VAPID public key for the client to subscribe with");
+  const subResp = await req("POST", "/push-sub", { headers: { cookie }, body: { c: seal(sk, { t: "push-sub", sub: { endpoint: "https://127.0.0.1:1/push", keys: { p256dh: "x", auth: "y" } } }) } });
+  ok(subResp.status === 200 && JSON.parse(subResp.body).ok === true, "phone registers a Web Push subscription over the encrypted channel");
+  ok(await until(async () => (await req("GET", "/health")).body.includes('"subs":1'), 1000), "daemon stores the subscription (visible in /health)");
+  ok((await req("POST", "/push-sub", { headers: { cookie }, body: { c: seal(sk, { t: "nope" }) } })).status === 400, "/push-sub rejects a body that isn't a sealed push-sub message");
+  // drop the live client: the app is now 'closed', but a subscription exists
+  stream.close();
+  ok(await until(async () => (await req("GET", "/health")).body.includes('"clients":0'), 2000), "live client disconnects (app closed)");
+  // the point of v0.6: with a subscription present, a permission prompt is now
+  // INTERCEPTED (and a push fired to wake the phone) instead of passing through.
+  const heldHook = reqTo(BASE, "POST", "/hook", { body: { kind: "permission", tool: "Bash", summary: "Run: wake me" } });
+  heldHook.catch(() => {});
+  const outcome = await Promise.race([heldHook.then(() => "passed-through"), sleep(800).then(() => "held")]);
+  ok(outcome === "held", "with a subscription but no live client, the daemon holds the prompt to wake the phone (no laptop fallback)");
+
   // ---- zero-knowledge relay (v0.5): remote phone, no VPN ---------------------
 
   const RELAY_PORT = 4598, RD_PORT = 4597;
@@ -291,6 +307,21 @@ try {
   const sealed = seal(key, { hi: 1 });
   const tampered = sealed.slice(0, -2) + (sealed.slice(-2) === "AA" ? "AB" : "AA");
   ok(openS(key, tampered) === null, "tampered ciphertext fails to open (auth tag holds)");
+
+  // ---- push module unit checks (in-process, isolated key dir) ----------------
+  process.env.AWAYKIT_HOME = mkdtempSync(join(tmpdir(), "awaykit-push-"));
+  const push = await import("../src/push.js");
+  const pinit = push.initPush();
+  ok(pinit.publicKey.length === 87 && pinit.subs === 0, "push.initPush() mints a VAPID keypair, no subs yet");
+  const goodSub = { endpoint: "https://push.example.com/abc", keys: { p256dh: "BPk", auth: "auth123" } };
+  ok(push.addSub(goodSub) === true && push.subCount() === 1, "addSub stores a valid https subscription");
+  ok(push.addSub(goodSub) === true && push.subCount() === 1, "addSub dedupes by endpoint");
+  ok(push.addSub({ endpoint: "http://insecure/x", keys: { p256dh: "a", auth: "b" } }) === false && push.subCount() === 1, "addSub rejects a non-https endpoint (SSRF guard)");
+  ok(push.addSub({ endpoint: "https://a/b" }) === false, "addSub rejects a subscription missing keys");
+  ok(push.initPush().subs === 1, "subscriptions persist to disk and reload");
+  push.removeSub("https://push.example.com/abc");
+  ok(push.subCount() === 0, "removeSub deletes by endpoint");
+  ok((await push.sendPush({ title: "x", body: "y" })).sent === 0, "sendPush with no subscriptions is a safe no-op");
 
   stream.close();
   console.log(`\nALL ${passed} CHECKS PASSED ✅`);

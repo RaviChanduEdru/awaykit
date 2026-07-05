@@ -12,7 +12,7 @@ If a design decision here is wrong, please open an issue.
    (E2E encryption with mutual authentication).
 4. No third party — including us — ever holds keys or plaintext.
 
-## Implemented today (v0.2)
+## Implemented today (v0.6)
 
 The sections below (`Pairing`, `Transport`, `Authorization scopes`) describe the
 **target** design. Here is what the code actually does **right now**, and its
@@ -43,8 +43,9 @@ honest limits.
   carrying its ephemeral public key, to `POST /session`).
 - **Loopback-only `/hook`.** The hook endpoint rejects non-loopback connections,
   so a device on the LAN cannot inject fake tool prompts.
-- **Connection is the switch.** With no paired phone connected, the daemon does
-  not intercept — Claude Code uses its normal on-laptop permission flow.
+- **Connection is the switch.** With no paired phone connected *and* no push
+  subscription registered, the daemon does not intercept — Claude Code uses its
+  normal on-laptop permission flow.
 - **Append-only audit log.** Every decision (approve / deny / aborted) is
   recorded as a JSON line at `~/.awaykit/audit.log` — a local record of what you
   approved while away. Read recent entries over loopback via `GET /audit`.
@@ -56,6 +57,17 @@ honest limits.
   direction, and size — never keys, never plaintext. Remote sessions ping every
   25 s and expire after 90 s of silence, so "connection is the switch" stays
   truthful remotely.
+- **Push notifications, zero-knowledge (v0.6).** The daemon owns a VAPID keypair
+  (`~/.awaykit/vapid.json`) and sends each wake-up *outbound itself* to the
+  browser's push endpoint. The payload is encrypted per RFC 8291 to the
+  subscription's own keys, so the push service — and any relay — forward only
+  ciphertext; only the device's service worker can read it. Subscriptions arrive
+  over the already-encrypted channel and are stored locally
+  (`~/.awaykit/push-subs.json`). Push needs a secure context (HTTPS), so it runs
+  over the relay or an HTTPS tunnel, not plain-HTTP LAN. A registered subscription
+  extends "connection is the switch": awaykit intercepts and wakes a *closed* app,
+  and falls back to the on-laptop prompt only when neither a live phone nor a
+  subscription exists.
 
 **What v0.1 defends against:** a passive Wi-Fi sniffer (sees only ciphertext);
 an unauthorized device on the same network (no `K` ⇒ can't read events, can't
