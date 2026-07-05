@@ -158,7 +158,9 @@ const server = createServer(async (req, res) => {
     // --- app shell (no auth; the key arrives via the URL fragment, not here) ---
     if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) {
       const html = await readFile(join(PUBLIC_DIR, "index.html"));
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      // Never let the phone run a stale app shell — always revalidate, so client
+      // updates (e.g. the push controls) land without a manual cache-bust.
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
       res.end(html);
       return;
     }

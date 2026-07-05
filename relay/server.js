@@ -116,7 +116,9 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) {
       const dir = await publicDir();
       if (!dir) { res.writeHead(500); res.end("phone client not bundled"); return; }
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      // Always revalidate the app shell so a redeployed relay serves the newest
+      // client (push controls, etc.) instead of a phone's cached copy.
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
       res.end(await readFile(join(dir, "index.html")));
       return;
     }
